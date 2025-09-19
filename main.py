@@ -33,6 +33,7 @@ def group_data(data, by_column, agg_column, agg_func):
 
 # GUI: wybór pliku i filtrów.
 class MainWindow(QWidget):
+
     def __init__(self):
         super().__init__()
         self.data = None
@@ -192,15 +193,29 @@ class MainWindow(QWidget):
 
     # Eksport wyników do pliku CSV.
     def generate_report(self):
+
         pass
 
     def on_clear_filters(self):
         """
-        Resetuje wybrane filtry.
+        Resetuje wybrane filtry i przywraca domyślne ustawienia.
         """
+        self.filter_column_combo.setCurrentIndex(0)  # Reset wyboru kolumny
+
+        # Reset wartości spinboxów (gdyby były widoczne)
         self.filter_min_spinbox.setValue(self.filter_min_spinbox.minimum())
         self.filter_max_spinbox.setValue(self.filter_max_spinbox.maximum())
+
+        # Reset kategorii
         self.category_filter_combo.setCurrentIndex(0)
+
+        # Ukryj wszystkie widżety filtrowania
+        self.filter_min_spinbox.hide()
+        self.filter_max_spinbox.hide()
+        self.category_filter_combo.hide()
+        self.category_combo_label.hide()
+
+        self.log_area.append("Filtry zostały zresetowane.")
 
     def perform_grouping(self):
         """
@@ -270,7 +285,9 @@ class MainWindow(QWidget):
             self.log_area.append(f"Błąd podczas grupowania: {e}")
 
     def generate_chart(self, x_values, y_values, x_label, y_label, title):
-        """Generowanie wykresu"""
+        """Generowanie wykresu
+
+        """
         fig = Figure(figsize=(8, 5))
         ax = fig.add_subplot(111)
         ax.bar(x_values, y_values, color='mediumseagreen')
@@ -299,6 +316,7 @@ class MainWindow(QWidget):
     def update_filter_column_options(self):
         if self.data is not None:
             self.filter_column_combo.clear()
+            self.filter_column_combo.addItem("Nie wybrano", userData=None)
             for col in self.data.columns:
                 if col in self.column_labels:
                     label = self.column_labels[col]
@@ -313,7 +331,10 @@ class MainWindow(QWidget):
             return
 
         self.group_column_combo.clear()
+        self.group_column_combo.addItem("Nie wybrano", userData=None)
+
         self.agg_column_combo.clear()
+        self.agg_column_combo.addItem("Nie wybrano", userData=None)
 
         # Kolumny dostępne w słowniku etykiet
         labeled_cols = [col for col in self.data.columns if col in self.column_labels]
@@ -334,6 +355,7 @@ class MainWindow(QWidget):
     def bin_numeric_column(self, series, column_name=None):
         """
         Dzieli kolumnę numeryczną na przedziały.
+
         """
         try:
             if column_name == "BMI":
@@ -433,19 +455,44 @@ class MainWindow(QWidget):
         return self.data.copy()
 
     def update_numeric_columns(self):
-        """Aktualizuje opcje kolumny agregacji po wybraniu kolumny grupowania.
-        Ukrywa wybraną kolumnę grupowania w opcjach agregacji."""
+        """
+        Aktualizuje opcje kolumny agregacji po wybraniu kolumny grupowania.
+        Ukrywa lub blokuje niepasujące funkcje agregujące.
+        """
         selected_group_col = self.group_column_combo.currentData()
         if not selected_group_col or self.data is None:
             return
 
+        # Zaktualizuj listę kolumn agregacji (jak wcześniej)
         numeric_cols = self.data.select_dtypes(include='number').columns.tolist()
 
-        # Usuń kolumnę grupującą z listy agregowanych
         if selected_group_col in numeric_cols:
-            numeric_cols.remove(selected_group_col)
+            if self.agg_column_combo.count() == 0:  # Jeśli pusta, uzupełnij
+                labeled_cols = [col for col in self.data.columns if col in self.column_labels]
+                numeric_labeled_cols = [col for col in numeric_cols if col in labeled_cols]
+                self.agg_column_combo.clear()
+                self.agg_column_combo.addItem("Nie wybrano", userData=None)
+                for col in numeric_labeled_cols:
+                    label = self.column_labels[col]
+                    self.agg_column_combo.addItem(label, userData=col)
 
-        self.agg_column_combo.setVisible(True)
+            # Wszystkie przyciski agregujące dostępne
+            for func_key, btn in self.agg_func_buttons.items():
+                btn.setEnabled(True)
+
+            self.agg_column_combo.setVisible(True)
+        else:
+            # Jeśli kolumna grupująca NIE jest numeryczna:
+            self.agg_column_combo.setVisible(False)
+
+            # Tylko "count" może być zaznaczone
+            for func_key, btn in self.agg_func_buttons.items():
+                if func_key == "count":
+                    btn.setEnabled(True)
+                    btn.setChecked(True)
+                else:
+                    btn.setEnabled(False)
+
         self.group_execute_btn.setVisible(True)
 
     def on_category_combo_changed(self):
