@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog,
     QVBoxLayout, QHBoxLayout, QTextEdit, QGroupBox, QComboBox,
-    QRadioButton, QButtonGroup, QGridLayout, QSpinBox)
+    QRadioButton, QButtonGroup, QGridLayout, QDoubleSpinBox, QCheckBox)
 
 from pandas.api.types import CategoricalDtype
 
@@ -28,12 +28,11 @@ def group_data(data, by_column, agg_column, agg_func):
     if by_column not in data.columns or agg_column not in data.columns:
         raise ValueError("Nieprawidłowe kolumny.")
 
-    return data.groupby(by_column)[agg_column].agg(agg_func).reset_index()
+    return data.groupby(by_column, observed=True)[agg_column].agg(agg_func).reset_index()
 
 
 # GUI: wybór pliku i filtrów.
 class MainWindow(QWidget):
-
     def __init__(self):
         super().__init__()
         self.data = None
@@ -78,8 +77,8 @@ class MainWindow(QWidget):
 
         self.column_labels = {'Gender': 'Gender',
                               'AGE': 'Age',
-                              'Urea': 'Urea level in blood [mmol/l]',
-                              'Cr': 'Creatinine ratio  [mg/mmol]',
+                              'Urea': 'Urea level in blood',
+                              'Cr': 'Creatinine ratio',
                               'HbA1c': 'HbA1c level',
                               'Chol': 'Cholesterol',
                               'TG': 'Triglycerides',
@@ -96,12 +95,18 @@ class MainWindow(QWidget):
         self.left_layout.addWidget(self.filter_column_combo)
 
         # Dla kolumn z wartościami numerycznymi
-        self.filter_min_spinbox = QSpinBox()
-        self.filter_max_spinbox = QSpinBox()
+        self.filter_min_spinbox = QDoubleSpinBox()
+        self.filter_max_spinbox = QDoubleSpinBox()
+
+        # Domyślny zakres na start, zostanie potem zmieniony dynamicznie
         self.filter_min_spinbox.setRange(0, 1000)
         self.filter_max_spinbox.setRange(0, 1000)
+
         self.filter_min_spinbox.setPrefix("Od: ")
         self.filter_max_spinbox.setPrefix("Do: ")
+
+        self.filter_min_spinbox.setDecimals(1)  # wyświetla 1 miejsce po przecinku
+        self.filter_max_spinbox.setDecimals(1)
 
         spinbox_layout = QHBoxLayout()
         spinbox_layout.addWidget(self.filter_min_spinbox)
@@ -168,6 +173,10 @@ class MainWindow(QWidget):
 
         self.left_layout.addLayout(agg_func_layout)
 
+        self.bin_checkbox = QCheckBox("📦 Pokaż przedziały")
+        self.bin_checkbox.setChecked(True)
+        self.left_layout.addWidget(self.bin_checkbox)
+
         # Przyciski w dolnej części okna
         self.group_execute_btn = QPushButton("📈 Generuj wykres")
         self.group_execute_btn.clicked.connect(self.perform_grouping)
@@ -193,7 +202,6 @@ class MainWindow(QWidget):
 
     # Eksport wyników do pliku CSV.
     def generate_report(self):
-
         pass
 
     def on_clear_filters(self):
@@ -202,7 +210,7 @@ class MainWindow(QWidget):
         """
         self.filter_column_combo.setCurrentIndex(0)  # Reset wyboru kolumny
 
-        # Reset wartości spinboxów (gdyby były widoczne)
+        # Reset wartości spinboxów
         self.filter_min_spinbox.setValue(self.filter_min_spinbox.minimum())
         self.filter_max_spinbox.setValue(self.filter_max_spinbox.maximum())
 
@@ -247,8 +255,8 @@ class MainWindow(QWidget):
             self.log_area.append("Wybierz funkcję agregującą.")
             return
 
-        # Jeśli kolumna grupująca jest numeryczna-dzielenie na przedziały dla większej czytelności wykresu
-        if pd.api.types.is_numeric_dtype(df[group_col]):
+        # Sprawdź, czy użytkownik chce widzieć dane w przedziałach
+        if self.bin_checkbox.isChecked() and pd.api.types.is_numeric_dtype(df[group_col]):
             binned_col = self.bin_numeric_column(df[group_col], column_name=group_col)
             df["_binned_group"] = binned_col
             group_key = "_binned_group"
@@ -257,7 +265,7 @@ class MainWindow(QWidget):
 
         try:
             if agg_func == "count":
-                grouped = df.groupby(group_key).size().reset_index(name="Liczba rekordów")
+                grouped = df.groupby(group_key, observed=True).size().reset_index(name="Liczba rekordów")
                 grouped = grouped.sort_values(by=group_key)
                 y_values = grouped["Liczba rekordów"]
                 y_label = "Liczba rekordów"
@@ -285,19 +293,42 @@ class MainWindow(QWidget):
             self.log_area.append(f"Błąd podczas grupowania: {e}")
 
     def generate_chart(self, x_values, y_values, x_label, y_label, title):
-        """Generowanie wykresu
-
+        """
+        Generowanie wykresu
         """
         fig = Figure(figsize=(8, 5))
         ax = fig.add_subplot(111)
-        ax.bar(x_values, y_values, color='mediumseagreen')
+        # Wykres kołowy tylko dla CLASS
+        if self.group_column_combo.currentData() == "CLASS":
+            wedges, texts, autotexts = ax.pie(
+                y_values,
+                labels=x_values,
+                autopct='%1.1f%%',
+                startangle=90,
+                colors=['pink', 'orange', 'mediumseagreen']
+            )
+            ax.set_title("Klasyfikacja pacjentów pod kątem wystepowania cukrzycy")
+            ax.axis('equal')
 
-        ax.set_title(title)
-        ax.set_xlabel(x_label)
-        ax.set_ylabel(y_label)
-        ax.grid(True)
+            # Dodajemy legendę
+            class_labels = {
+                'Y': 'Diabetic',
+                'N': 'Non-Diabetic',
+                'P': 'Prediction of diabetes'
+            }
+
+            # Dopasuj etykiety do objaśnień
+            legend_labels = [class_labels.get(str(label), str(label)) for label in x_values]
+            ax.legend(wedges, legend_labels, title="Legenda", loc="best")
+
+        else:
+            ax.bar(x_values, y_values, color='mediumseagreen')
+            ax.set_title(title)
+            ax.set_xlabel(x_label)
+            ax.set_ylabel(y_label)
+            ax.grid(True)
+
         fig.tight_layout()
-
         canvas = FigureCanvas(fig)
         self.right_layout.addWidget(canvas)
 
@@ -355,7 +386,6 @@ class MainWindow(QWidget):
     def bin_numeric_column(self, series, column_name=None):
         """
         Dzieli kolumnę numeryczną na przedziały.
-
         """
         try:
             if column_name == "BMI":
@@ -365,20 +395,58 @@ class MainWindow(QWidget):
                 return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
 
             elif column_name == "AGE":
-                bins = [0, 20, 30, 40, 50, 60, 70, 120]
+                bins = [0, 20, 30, 40, 50, 60, 70, 80]
                 labels = ["<20", "20-29", "30-39", "40-49", "50-59", "60-69", "70+"]
                 cat_type = CategoricalDtype(categories=labels, ordered=True)
                 return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
 
             elif column_name == "Chol":
-                bins = [0, 4.99, 5.99, 6.99, 10]
-                labels = ["Dobry", "Podwyższony", "Wysoki", "Bardzo wysoki"]
+                bins = [0, 4.99, 5.99, 6.99, 12]
+                labels = ['<5', '5-5.99', '6-6.99', '7≤ ']
                 cat_type = CategoricalDtype(categories=labels, ordered=True)
                 return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
 
+            elif column_name == 'Cr':
+                bins = [0, 49.99, 99.99, 149.99, 199.99, 800]
+                labels = ['<50', '50-99.99', '100-149.99', '150-199.99' '200≤ ']
+                cat_type = CategoricalDtype(categories=labels, ordered=True)
+                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
+
+            elif column_name == 'HbA1c':
+                bins = [0, 5.6, 6.49, 16]
+                labels = ['<5.70', '5.7-6.49', '6.5≤']
+                cat_type = CategoricalDtype(categories=labels, ordered=True)
+                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
+
+            elif column_name == 'TG':
+                bins = [0, 1.69, 2.99, 3.99, 4.99, 14]
+                labels = ['<1.70', '1.70-2.99', '3-3.99', '4-4.99', '5≤']
+                cat_type = CategoricalDtype(categories=labels, ordered=True)
+                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
+            elif column_name == 'HDL':
+                bins = [0, 1.19, 2.19, 3.99, 4.99, 10]
+                labels = ['<1.2', '1.2-2.19', '2.20-3.99', '4-4.99', '5≤']
+                cat_type = CategoricalDtype(categories=labels, ordered=True)
+                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
+            elif column_name == 'LDL':
+                bins = [0, 2.99, 3.99, 4.99, 5.99, 10]
+                labels = ['<3', '3-3.99', '4-4.99', '5-5.99', '6≤']
+                cat_type = CategoricalDtype(categories=labels, ordered=True)
+                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
+            elif column_name == 'VLDL':
+                bins = [0, 0.79, 2.99, 4.99, 35]
+                labels = ['<0.8', '0.8-2.99', '3-4.99', '5≤']
+                cat_type = CategoricalDtype(categories=labels, ordered=True)
+                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
+            elif column_name == 'Urea':
+                bins = [0, 1.99, 2.99, 3.99, 4.99, 5.99, 40]
+                labels = ['<2', '2-2.99', '3-3.99', '4-4.99', '5-5.99', '6≤']
+                cat_type = CategoricalDtype(categories=labels, ordered=True)
+                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
             else:
                 # Dla pozostałych: niezmienione
                 return series
+
         except Exception as e:
             self.log_area.append(f"Błąd podziału na kolumny '{column_name}': {e}")
             return series
@@ -391,41 +459,35 @@ class MainWindow(QWidget):
 
         col_data = self.data[filter_col].dropna()
 
-        if pd.api.types.is_numeric_dtype(col_data):
+        if pd.api.types.is_integer_dtype(col_data):
             min_val = int(col_data.min())
             max_val = int(col_data.max())
-
-            self.filter_min_spinbox.setRange(min_val, max_val)
-            self.filter_max_spinbox.setRange(min_val, max_val)
-
-            self.filter_min_spinbox.setValue(min_val)
-            self.filter_max_spinbox.setValue(max_val)
-
-            # Pokaż
-            self.filter_min_spinbox.show()
-            self.filter_max_spinbox.show()
-
-            # Ukryj kategoryczne
-            self.category_filter_combo.hide()
-            self.category_combo_label.hide()
-
+            self.filter_min_spinbox.setDecimals(0)
+            self.filter_max_spinbox.setDecimals(0)
+            self.filter_min_spinbox.setSingleStep(1)
+            self.filter_max_spinbox.setSingleStep(1)
+        elif pd.api.types.is_float_dtype(col_data):
+            min_val = float(col_data.min())
+            max_val = float(col_data.max())
+            self.filter_min_spinbox.setDecimals(1)
+            self.filter_max_spinbox.setDecimals(1)
+            self.filter_min_spinbox.setSingleStep(0.1)
+            self.filter_max_spinbox.setSingleStep(0.1)
         else:
-            unique_vals = sorted(col_data.dropna().unique(), key=str)
+            return  # np. kolumny nie numeryczne - nie pokazuj spinboxów
 
-            self.category_filter_combo.clear()
-            self.category_filter_combo.addItem("Brak filtra", userData=None)
+        self.filter_min_spinbox.setRange(min_val, max_val)
+        self.filter_max_spinbox.setRange(min_val, max_val)
 
-            for val in unique_vals:
-                self.category_filter_combo.addItem(str(val), userData=val)
+        self.filter_min_spinbox.setValue(min_val)
+        self.filter_max_spinbox.setValue(max_val)
 
-            self.category_filter_combo.setCurrentIndex(0)
+        self.filter_min_spinbox.show()
+        self.filter_max_spinbox.show()
 
-            self.category_filter_combo.show()
-            self.category_combo_label.show()
-
-            # Ukryj numeryczne
-            self.filter_min_spinbox.hide()
-            self.filter_max_spinbox.hide()
+        # Ukryj kategoryczne
+        self.category_filter_combo.hide()
+        self.category_combo_label.hide()
 
     def get_filtered_data(self):
         """
@@ -494,6 +556,11 @@ class MainWindow(QWidget):
                     btn.setEnabled(False)
 
         self.group_execute_btn.setVisible(True)
+        # Pokaż lub ukryj checkbox "Pokaż przedziały"
+        if pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
+            self.bin_checkbox.setVisible(True)
+        else:
+            self.bin_checkbox.setVisible(False)
 
     def on_category_combo_changed(self):
         """
