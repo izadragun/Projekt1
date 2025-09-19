@@ -18,7 +18,7 @@ def load_data(path):
         data = pd.read_csv(path, delimiter=',')
         return data
     except FileNotFoundError:
-        print("Nie odnaleziono pliku")
+        print('File not found')
 
 
 def group_data(data, by_column, agg_column, agg_func):
@@ -26,7 +26,7 @@ def group_data(data, by_column, agg_column, agg_func):
     Grupuje dane na podstawie wybranej kolumny
     """
     if by_column not in data.columns or agg_column not in data.columns:
-        raise ValueError("Nieprawidłowe kolumny.")
+        raise ValueError('Invalid columns.')
 
     return data.groupby(by_column, observed=True)[agg_column].agg(agg_func).reset_index()
 
@@ -36,21 +36,21 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.data = None
-        self.setWindowTitle("Analiza danych")
+        self.setWindowTitle('Data analysis')
         self.setGeometry(100, 100, 1200, 800)
 
         self.main_layout = QVBoxLayout()
         self.center_layout = QHBoxLayout()
 
         # Lewa część: przyciski filtrowania
-        self.left_box = QGroupBox("🔍 Filtry i grupowanie")
+        self.left_box = QGroupBox('🔍 Filters and grouping')
         self.left_layout = QVBoxLayout()
 
         self.left_box.setLayout(self.left_layout)
         self.left_box.setMinimumWidth(300)
 
         # Prawa część: Wizualizacje
-        self.right_box = QGroupBox("📊 Wizualizacje")
+        self.right_box = QGroupBox('📊 Charts')
         self.right_layout = QVBoxLayout()
         self.right_box.setLayout(self.right_layout)
 
@@ -58,9 +58,9 @@ class MainWindow(QWidget):
         self.center_layout.addWidget(self.right_box, 2)
 
         # Dolna część: Logi
-        self.bottom_box = QGroupBox("📝 Komunikaty")
+        self.bottom_box = QGroupBox('📝 Logs')
         self.bottom_layout = QVBoxLayout()
-        self.label = QLabel("Nie wybrano pliku")
+        self.label = QLabel('No file selected')
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
         self.log_area.setFixedHeight(150)
@@ -70,7 +70,7 @@ class MainWindow(QWidget):
         self.bottom_box.setLayout(self.bottom_layout)
 
         # Przycisk wyboru pliku
-        self.button = QPushButton("📂 Wybierz plik CSV")
+        self.button = QPushButton('📂 Select CSV File')
         self.button.clicked.connect(self.on_file_select)
 
         # === LEWA CZĘŚĆ: FILTRY I GRUPOWANIE ===
@@ -88,7 +88,7 @@ class MainWindow(QWidget):
                               'BMI': 'BMI',
                               'CLASS': 'Classification'}
         # Opcje filtrowania
-        self.left_layout.addWidget(QLabel("Filtruj wg:"))
+        self.left_layout.addWidget(QLabel('Filter by'))
 
         self.filter_column_combo = QComboBox()
         self.filter_column_combo.currentIndexChanged.connect(self.update_filter_values)
@@ -102,8 +102,8 @@ class MainWindow(QWidget):
         self.filter_min_spinbox.setRange(0, 1000)
         self.filter_max_spinbox.setRange(0, 1000)
 
-        self.filter_min_spinbox.setPrefix("Od: ")
-        self.filter_max_spinbox.setPrefix("Do: ")
+        self.filter_min_spinbox.setPrefix('From: ')
+        self.filter_max_spinbox.setPrefix('To:')
 
         self.filter_min_spinbox.setDecimals(1)  # wyświetla 1 miejsce po przecinku
         self.filter_max_spinbox.setDecimals(1)
@@ -118,7 +118,7 @@ class MainWindow(QWidget):
         self.filter_max_spinbox.hide()
 
         # Dla kolumn z wartościami nienumerycznymi
-        self.category_combo_label = QLabel("Wybierz wartość:")
+        self.category_combo_label = QLabel('Select value:')
         self.left_layout.addWidget(self.category_combo_label)
         self.category_combo_label.hide()
 
@@ -131,7 +131,7 @@ class MainWindow(QWidget):
         self.left_layout.addSpacing(20)
 
         # Grupowanie: wybór kolumn
-        self.grouping_section_label = QLabel("Grupuj wg kolumny:")
+        self.grouping_section_label = QLabel('Group by:')
         self.left_layout.addWidget(self.grouping_section_label)
 
         self.group_column_combo = QComboBox()
@@ -147,11 +147,11 @@ class MainWindow(QWidget):
         self.agg_func_buttons = {}
 
         agg_functions = {
-            "mean": "Średnia",
-            "median": "Mediana",
-            "count": "Ilość pacjentów",
-            "min": "Min",
-            "max": "Max"
+            'mean': 'Mean',
+            'median': 'Median',
+            'count': 'Number of patients',
+            'min': 'Min',
+            'max': 'Max'
         }
         # Wyświetlanie przycisków w dwóch kolumnach
         agg_func_layout = QGridLayout()
@@ -173,22 +173,22 @@ class MainWindow(QWidget):
 
         self.left_layout.addLayout(agg_func_layout)
 
-        self.bin_checkbox = QCheckBox("📦 Pokaż przedziały")
+        self.bin_checkbox = QCheckBox('📦 Show data in ranges')
         self.bin_checkbox.setChecked(True)
         self.left_layout.addWidget(self.bin_checkbox)
 
         # Przyciski w dolnej części okna
-        self.group_execute_btn = QPushButton("📈 Generuj wykres")
+        self.group_execute_btn = QPushButton('📈 Show chart')
         self.group_execute_btn.clicked.connect(self.perform_grouping)
         self.group_execute_btn.setVisible(False)
         self.left_layout.addWidget(self.group_execute_btn)
 
-        self.generate_report_btn = QPushButton("📄 Generuj raport")
+        self.generate_report_btn = QPushButton('📄 Generate report')
         self.generate_report_btn.clicked.connect(self.generate_report)
         self.generate_report_btn.setVisible(False)  # Ukryty na start
         self.left_layout.addWidget(self.generate_report_btn)
 
-        self.clear_filters_btn = QPushButton("❌ Usuń filtry")
+        self.clear_filters_btn = QPushButton('❌ Clear filters')
         self.clear_filters_btn.clicked.connect(self.on_clear_filters)
         self.clear_filters_btn.setVisible(False)  # Ukryty na start
         self.left_layout.addWidget(self.clear_filters_btn)
@@ -223,7 +223,7 @@ class MainWindow(QWidget):
         self.category_filter_combo.hide()
         self.category_combo_label.hide()
 
-        self.log_area.append("Filtry zostały zresetowane.")
+        self.log_area.append('Filters have been cleared.')
 
     def perform_grouping(self):
         """
@@ -235,7 +235,7 @@ class MainWindow(QWidget):
 
         df = self.get_filtered_data()
         if df is None or df.empty:
-            self.log_area.append("Brak danych do wyświetlenia.")
+            self.log_area.append('No data to display.')
             return
 
         group_col = self.group_column_combo.currentData()
@@ -248,11 +248,11 @@ class MainWindow(QWidget):
                 break
 
         if not group_col:
-            self.log_area.append("Wybierz kolumnę do grupowania.")
+            self.log_area.append('"Select a column to group by."')
             return
 
         if not agg_func:
-            self.log_area.append("Wybierz funkcję agregującą.")
+            self.log_area.append('Select an aggregate function.')
             return
 
         # Sprawdź, czy użytkownik chce widzieć dane w przedziałach
@@ -265,14 +265,14 @@ class MainWindow(QWidget):
 
         try:
             if agg_func == "count":
-                grouped = df.groupby(group_key, observed=True).size().reset_index(name="Liczba rekordów")
+                grouped = df.groupby(group_key, observed=True).size().reset_index(name='Number of patients')
                 grouped = grouped.sort_values(by=group_key)
-                y_values = grouped["Liczba rekordów"]
-                y_label = "Liczba rekordów"
+                y_values = grouped['Number of patients']
+                y_label = 'Number of patients'
             else:
                 agg_col = self.agg_column_combo.currentData()
                 if not agg_col:
-                    self.log_area.append("Wybierz kolumnę do agregacji.")
+                    self.log_area.append('Select a column to aggregate.')
                     return
 
                 grouped = group_data(df, group_key, agg_col, agg_func)
@@ -287,10 +287,10 @@ class MainWindow(QWidget):
 
             self.generate_chart(grouped[group_key], y_values, x_label, y_axis_label, title)
 
-            self.log_area.append("Wygenerowano wykres.")
+            self.log_area.append('The chart has been generated.')
 
         except Exception as e:
-            self.log_area.append(f"Błąd podczas grupowania: {e}")
+            self.log_area.append(f'Error while grouping: {e}')
 
     def generate_chart(self, x_values, y_values, x_label, y_label, title):
         """
@@ -307,7 +307,7 @@ class MainWindow(QWidget):
                 startangle=90,
                 colors=['pink', 'orange', 'mediumseagreen']
             )
-            ax.set_title("Klasyfikacja pacjentów pod kątem wystepowania cukrzycy")
+            ax.set_title('Classification of patients according to the occurrence of diabetes')
             ax.axis('equal')
 
             # Dodajemy legendę
@@ -319,7 +319,7 @@ class MainWindow(QWidget):
 
             # Dopasuj etykiety do objaśnień
             legend_labels = [class_labels.get(str(label), str(label)) for label in x_values]
-            ax.legend(wedges, legend_labels, title="Legenda", loc="best")
+            ax.legend(wedges, legend_labels, title='Legend', loc='best')
 
         else:
             ax.bar(x_values, y_values, color='mediumseagreen')
@@ -339,7 +339,7 @@ class MainWindow(QWidget):
                 selected_func = func_key
                 break
 
-        if selected_func == "count":
+        if selected_func == 'count':
             self.agg_column_combo.setVisible(False)
         else:
             self.agg_column_combo.setVisible(True)
@@ -347,7 +347,7 @@ class MainWindow(QWidget):
     def update_filter_column_options(self):
         if self.data is not None:
             self.filter_column_combo.clear()
-            self.filter_column_combo.addItem("Nie wybrano", userData=None)
+            self.filter_column_combo.addItem('Not selected', userData=None)
             for col in self.data.columns:
                 if col in self.column_labels:
                     label = self.column_labels[col]
@@ -362,10 +362,10 @@ class MainWindow(QWidget):
             return
 
         self.group_column_combo.clear()
-        self.group_column_combo.addItem("Nie wybrano", userData=None)
+        self.group_column_combo.addItem('Not selected', userData=None)
 
         self.agg_column_combo.clear()
-        self.agg_column_combo.addItem("Nie wybrano", userData=None)
+        self.agg_column_combo.addItem('Not selected', userData=None)
 
         # Kolumny dostępne w słowniku etykiet
         labeled_cols = [col for col in self.data.columns if col in self.column_labels]
@@ -388,19 +388,20 @@ class MainWindow(QWidget):
         Dzieli kolumnę numeryczną na przedziały.
         """
         try:
-            if column_name == "BMI":
-                bins = [0, 18.5, 24.9, 29.9, 34.9, 100]
-                labels = ["Niedowaga", "Norma", "Nadwaga", "Otyłość I", "Otyłość II+"]
+            if column_name == 'BMI':
+                bins = [0, 18.5, 24.9, 29.9, 34.9, 39.9, 100]
+                labels = ['Underweight', 'Normal weight', 'Overweight', 'Obesity Class I',
+                          'Obesity Class II', 'Obesity Class III']
                 cat_type = CategoricalDtype(categories=labels, ordered=True)
                 return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
 
-            elif column_name == "AGE":
+            elif column_name == 'AGE':
                 bins = [0, 20, 30, 40, 50, 60, 70, 80]
-                labels = ["<20", "20-29", "30-39", "40-49", "50-59", "60-69", "70+"]
+                labels = ['<20', '20-29', '30-39', '40-49', '50-59', '60-69', '70+']
                 cat_type = CategoricalDtype(categories=labels, ordered=True)
                 return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
 
-            elif column_name == "Chol":
+            elif column_name == 'Chol':
                 bins = [0, 4.99, 5.99, 6.99, 12]
                 labels = ['<5', '5-5.99', '6-6.99', '7≤ ']
                 cat_type = CategoricalDtype(categories=labels, ordered=True)
@@ -408,7 +409,7 @@ class MainWindow(QWidget):
 
             elif column_name == 'Cr':
                 bins = [0, 49.99, 99.99, 149.99, 199.99, 800]
-                labels = ['<50', '50-99.99', '100-149.99', '150-199.99' '200≤ ']
+                labels = ['<50', '50-99.99', '100-149.99', '150-199.99', '200≤ ']
                 cat_type = CategoricalDtype(categories=labels, ordered=True)
                 return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
 
@@ -448,7 +449,7 @@ class MainWindow(QWidget):
                 return series
 
         except Exception as e:
-            self.log_area.append(f"Błąd podziału na kolumny '{column_name}': {e}")
+            self.log_area.append(f"Error while grouping values '{column_name}': {e}")
             return series
 
     def update_filter_values(self):
@@ -466,6 +467,18 @@ class MainWindow(QWidget):
             self.filter_max_spinbox.setDecimals(0)
             self.filter_min_spinbox.setSingleStep(1)
             self.filter_max_spinbox.setSingleStep(1)
+
+            self.filter_min_spinbox.setRange(min_val, max_val)
+            self.filter_max_spinbox.setRange(min_val, max_val)
+            self.filter_min_spinbox.setValue(min_val)
+            self.filter_max_spinbox.setValue(max_val)
+
+            self.filter_min_spinbox.show()
+            self.filter_max_spinbox.show()
+
+            self.category_filter_combo.hide()
+            self.category_combo_label.hide()
+
         elif pd.api.types.is_float_dtype(col_data):
             min_val = float(col_data.min())
             max_val = float(col_data.max())
@@ -473,21 +486,30 @@ class MainWindow(QWidget):
             self.filter_max_spinbox.setDecimals(1)
             self.filter_min_spinbox.setSingleStep(0.1)
             self.filter_max_spinbox.setSingleStep(0.1)
+
+            self.filter_min_spinbox.setRange(min_val, max_val)
+            self.filter_max_spinbox.setRange(min_val, max_val)
+            self.filter_min_spinbox.setValue(min_val)
+            self.filter_max_spinbox.setValue(max_val)
+
+            self.filter_min_spinbox.show()
+            self.filter_max_spinbox.show()
+
+            self.category_filter_combo.hide()
+            self.category_combo_label.hide()
+
         else:
-            return  # np. kolumny nie numeryczne - nie pokazuj spinboxów
+            # Kolumna nie jest numeryczna → pokaż combo box z wartościami kategorii
+            unique_values = sorted(col_data.dropna().unique().tolist())
+            self.category_filter_combo.clear()
+            for val in unique_values:
+                self.category_filter_combo.addItem(str(val), userData=val)
 
-        self.filter_min_spinbox.setRange(min_val, max_val)
-        self.filter_max_spinbox.setRange(min_val, max_val)
+            self.category_combo_label.show()
+            self.category_filter_combo.show()
 
-        self.filter_min_spinbox.setValue(min_val)
-        self.filter_max_spinbox.setValue(max_val)
-
-        self.filter_min_spinbox.show()
-        self.filter_max_spinbox.show()
-
-        # Ukryj kategoryczne
-        self.category_filter_combo.hide()
-        self.category_combo_label.hide()
+            self.filter_min_spinbox.hide()
+            self.filter_max_spinbox.hide()
 
     def get_filtered_data(self):
         """
@@ -533,7 +555,7 @@ class MainWindow(QWidget):
                 labeled_cols = [col for col in self.data.columns if col in self.column_labels]
                 numeric_labeled_cols = [col for col in numeric_cols if col in labeled_cols]
                 self.agg_column_combo.clear()
-                self.agg_column_combo.addItem("Nie wybrano", userData=None)
+                self.agg_column_combo.addItem('Not selected', userData=None)
                 for col in numeric_labeled_cols:
                     label = self.column_labels[col]
                     self.agg_column_combo.addItem(label, userData=col)
@@ -549,7 +571,7 @@ class MainWindow(QWidget):
 
             # Tylko "count" może być zaznaczone
             for func_key, btn in self.agg_func_buttons.items():
-                if func_key == "count":
+                if func_key == 'count':
                     btn.setEnabled(True)
                     btn.setChecked(True)
                 else:
@@ -568,23 +590,23 @@ class MainWindow(QWidget):
         """
         selected = self.category_filter_combo.currentText()
         if selected:
-            self.log_area.append(f"Wybrano wartość: {selected}")
+            self.log_area.append(f'Selected value: {selected}')
 
     def on_file_select(self):
         """
         Wybór pliku
         """
-        path, _ = QFileDialog.getOpenFileName(self, "Wybierz plik CSV", "", "Pliki CSV (*.csv)")
+        path, _ = QFileDialog.getOpenFileName(self, 'Choose CSV file', '', 'CSV files (*.csv)')
         if not path:
-            self.log_area.append("Nie wybrano pliku.")
+            self.log_area.append('No file selected.')
             return
 
-        self.label.setText(f"Wybrano: {path}")
-        self.log_area.append(f"Załadowano plik: {path}")
+        self.label.setText(f'Selected: {path}')
+        self.log_area.append(f'File loaded: {path}')
         self.data = load_data(path)
 
         if self.data is not None:
-            self.log_area.append("Dane zostały przetworzone.")
+            self.log_area.append('Data has been processed.')
             self.update_filter_column_options()
             self.update_grouping_column_options()
             # Pokaż przyciski po załadowaniu danych
@@ -592,7 +614,7 @@ class MainWindow(QWidget):
             self.generate_report_btn.setVisible(True)
             self.clear_filters_btn.setVisible(True)
         else:
-            self.log_area.append("Błąd podczas przetwarzania danych.")
+            self.log_area.append('An error occurred while processing data.')
             # Ukryj przyciski, jeśli dane się nie wczytały
             self.group_execute_btn.setVisible(False)
             self.generate_report_btn.setVisible(False)
@@ -615,5 +637,5 @@ def main():
     sys.exit(app.exec())
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
