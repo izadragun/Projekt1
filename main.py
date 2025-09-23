@@ -2,12 +2,13 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog,
     QVBoxLayout, QHBoxLayout, QTextEdit, QGroupBox, QComboBox,
     QRadioButton, QButtonGroup, QGridLayout, QDoubleSpinBox, QCheckBox)
+from matplotlib import pyplot as plt
 
 from pandas.api.types import CategoricalDtype
 
 import sys
 import pandas as pd
-
+import seaborn as sns
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -127,9 +128,6 @@ class MainWindow(QWidget):
         self.left_layout.addWidget(self.category_filter_combo)
         self.category_filter_combo.hide()
 
-        # Odstęp przed "Grupuj wg"
-        self.left_layout.addSpacing(20)
-
         # Grupowanie: wybór kolumn
         self.grouping_section_label = QLabel('Group by:')
         self.left_layout.addWidget(self.grouping_section_label)
@@ -173,12 +171,33 @@ class MainWindow(QWidget):
 
         self.left_layout.addLayout(agg_func_layout)
 
+        # Checkbox do wyświetlania różnic pomiędzy kobietami a mężczyznami
+
+        self.gender_checkbox = QCheckBox('🎨 Show gender differences')
+        self.gender_checkbox.setChecked(False)
+        self.left_layout.addWidget(self.gender_checkbox)
+        self.group_column_combo.currentIndexChanged.connect(self.update_gender_checkbox_visibility)
+        self.filter_column_combo.currentIndexChanged.connect(self.update_gender_checkbox_visibility)
+
+        self.gender_checkbox.hide()
+
+        # Checkbox do wyświetlania danych w przedziałach
         self.bin_checkbox = QCheckBox('📦 Show data in ranges')
         self.bin_checkbox.setChecked(True)
         self.left_layout.addWidget(self.bin_checkbox)
 
         # Przyciski w dolnej części okna
-        self.group_execute_btn = QPushButton('📈 Show chart')
+        self.chart_type_combo = QComboBox()
+        self.chart_type_combo.addItem("Select chart type")
+        self.chart_type_combo.addItems([
+            "Bar Chart",
+            "Pie Chart",
+            "Line Chart",
+            "Scatter Plot"
+        ])
+        self.left_layout.addWidget(self.chart_type_combo)
+
+        self.group_execute_btn = QPushButton('📈 Generate chart')
         self.group_execute_btn.clicked.connect(self.perform_grouping)
         self.group_execute_btn.setVisible(False)
         self.left_layout.addWidget(self.group_execute_btn)
@@ -188,7 +207,7 @@ class MainWindow(QWidget):
         self.generate_report_btn.setVisible(False)  # Ukryty na start
         self.left_layout.addWidget(self.generate_report_btn)
 
-        self.clear_filters_btn = QPushButton('❌ Clear filters')
+        self.clear_filters_btn = QPushButton('❌ Reset filters and grouping')
         self.clear_filters_btn.clicked.connect(self.on_clear_filters)
         self.clear_filters_btn.setVisible(False)  # Ukryty na start
         self.left_layout.addWidget(self.clear_filters_btn)
@@ -202,35 +221,48 @@ class MainWindow(QWidget):
 
     # Eksport wyników do pliku CSV.
     def generate_report(self):
+
         pass
 
     def on_clear_filters(self):
         """
-        Resetuje wybrane filtry i przywraca domyślne ustawienia.
+        Resetuje wybrane filtry i grupowanie – przywraca domyślne ustawienia.
         """
-        self.filter_column_combo.setCurrentIndex(0)  # Reset wyboru kolumny
-
-        # Reset wartości spinboxów
+        # Reset filtra
+        self.filter_column_combo.setCurrentIndex(0)
         self.filter_min_spinbox.setValue(self.filter_min_spinbox.minimum())
         self.filter_max_spinbox.setValue(self.filter_max_spinbox.maximum())
-
-        # Reset kategorii
-        self.category_filter_combo.setCurrentIndex(0)
-
-        # Ukryj wszystkie widżety filtrowania
         self.filter_min_spinbox.hide()
         self.filter_max_spinbox.hide()
+
+        self.category_filter_combo.setCurrentIndex(0)
         self.category_filter_combo.hide()
         self.category_combo_label.hide()
 
-        self.log_area.append('Filters have been cleared.')
+        # Reset grupowania
+        self.group_column_combo.setCurrentIndex(0)
+        self.agg_column_combo.setCurrentIndex(0)
+        self.agg_column_combo.hide()
+
+        # Reset funkcji agregujących
+        self.agg_func_group.setExclusive(False)
+        for btn in self.agg_func_buttons.values():
+            btn.setChecked(False)
+        self.agg_func_group.setExclusive(True)
+
+        # Ukryj checkboxy
+        self.gender_checkbox.setVisible(False)
+        self.gender_checkbox.setChecked(False)
+
+        self.bin_checkbox.setVisible(True)
+        self.bin_checkbox.setChecked(True)
+
+        self.log_area.append('Filters and grouping have been reset.')
 
     def perform_grouping(self):
         """
-        Grupowanie na podstawie wybranych kryteriów.
+        Grupowanie na podstawie wybranych kryteriów z uwzględnieniem podziału na płeć (Gender).
         """
-
-        self.clear_logs()
         self.clear_right_panel()
 
         df = self.get_filtered_data()
@@ -248,26 +280,35 @@ class MainWindow(QWidget):
                 break
 
         if not group_col:
-            self.log_area.append('"Select a column to group by."')
+            self.log_area.append('Select a column to group by.')
             return
 
         if not agg_func:
             self.log_area.append('Select an aggregate function.')
             return
 
-        # Sprawdź, czy użytkownik chce widzieć dane w przedziałach
+        use_gender = self.gender_checkbox.isChecked()
+
+        # Przygotuj klucz(y) grupowania
+        if use_gender:
+            group_keys = [group_col, 'Gender']
+        else:
+            group_keys = [group_col]
+
+        # Obsługa binowania, jeśli zaznaczony checkbox i kolumna numeryczna
         if self.bin_checkbox.isChecked() and pd.api.types.is_numeric_dtype(df[group_col]):
             binned_col = self.bin_numeric_column(df[group_col], column_name=group_col)
             df["_binned_group"] = binned_col
-            group_key = "_binned_group"
-        else:
-            group_key = group_col
+            # Jeśli używamy podziału na płeć, grupujemy po binowanym plus Gender
+            if use_gender:
+                group_keys = ["_binned_group", 'Gender']
+            else:
+                group_keys = ["_binned_group"]
 
         try:
             if agg_func == "count":
-                grouped = df.groupby(group_key, observed=True).size().reset_index(name='Number of patients')
-                grouped = grouped.sort_values(by=group_key)
-                y_values = grouped['Number of patients']
+                grouped = df.groupby(group_keys, observed=True).size().reset_index(name='Number of patients')
+                y_col = 'Number of patients'
                 y_label = 'Number of patients'
             else:
                 agg_col = self.agg_column_combo.currentData()
@@ -275,62 +316,117 @@ class MainWindow(QWidget):
                     self.log_area.append('Select a column to aggregate.')
                     return
 
-                grouped = group_data(df, group_key, agg_col, agg_func)
-                grouped = grouped.sort_values(by=group_key)
-                y_values = grouped[agg_col]
+                grouped = df.groupby(group_keys, observed=True).agg({agg_col: agg_func}).reset_index()
+                y_col = agg_col
                 y_label = self.column_labels.get(agg_col, agg_col)
 
+            grouped = grouped.sort_values(by=group_keys)
             agg_label = self.agg_func_buttons[agg_func].text()
             x_label = self.column_labels.get(group_col, group_col)
-            title = f"{agg_label} by {x_label}"
-            y_axis_label = f"{agg_label} {y_label}"
+            title = f"{agg_label} by {x_label.lower()}"
+            y_axis_label = y_label
 
-            self.generate_chart(grouped[group_key], y_values, x_label, y_axis_label, title)
+            x_col_name = group_keys[0] if "_binned_group" not in df.columns else "_binned_group"
+            hue_col = 'Gender' if use_gender else None
 
-            self.log_area.append('The chart has been generated.')
+            self.generate_chart(
+                data=grouped,
+                x_col=x_col_name,
+                y_col=y_col,
+                x_label=x_label,
+                y_label=y_axis_label,
+                title=title,
+                hue_col=hue_col,
+                agg_func=agg_func,
+                binning_enabled=self.bin_checkbox.isChecked()
+            )
 
         except Exception as e:
             self.log_area.append(f'Error while grouping: {e}')
 
-    def generate_chart(self, x_values, y_values, x_label, y_label, title):
+    def generate_chart(self, data, x_col, y_col, x_label, y_label, title, hue_col=None, agg_func=None,
+                       binning_enabled=False):
         """
-        Generowanie wykresu
+        Generowanie wykresu z obsługą wykresu kołowego:
+        - Pie chart jest dostępny zawsze dla CLASS,
+        - oraz dla innych kolumn tylko gdy binning_enabled=True lub agg_func == 'count'.
         """
-        fig = Figure(figsize=(8, 5))
+        selected_chart = self.chart_type_combo.currentText()
+        palette = {"F": "pink", "M": "blue"}
+
+        if selected_chart == "Select chart type":
+            self.log_area.append('Please select a chart type before generating.')
+            return
+
+        fig = Figure(figsize=(7, 5))
         ax = fig.add_subplot(111)
-        # Wykres kołowy tylko dla CLASS
-        if self.group_column_combo.currentData() == "CLASS":
-            wedges, texts, autotexts = ax.pie(
-                y_values,
-                labels=x_values,
-                autopct='%1.1f%%',
-                startangle=90,
-                colors=['pink', 'orange', 'mediumseagreen']
-            )
-            ax.set_title('Classification of patients according to the occurrence of diabetes')
-            ax.axis('equal')
 
-            # Dodajemy legendę
-            class_labels = {
-                'Y': 'Diabetic',
-                'N': 'Non-Diabetic',
-                'P': 'Prediction of diabetes'
-            }
+        try:
+            if selected_chart == "Bar Chart":
+                if hue_col:
+                    sns.barplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
+                else:
+                    sns.barplot(data=data, x=x_col, y=y_col, ax=ax)
 
-            # Dopasuj etykiety do objaśnień
-            legend_labels = [class_labels.get(str(label), str(label)) for label in x_values]
-            ax.legend(wedges, legend_labels, title='Legend', loc='best')
+            elif selected_chart == "Line Chart":
+                if hue_col:
+                    sns.lineplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
+                else:
+                    sns.lineplot(data=data, x=x_col, y=y_col, ax=ax)
 
-        else:
-            ax.bar(x_values, y_values, color='mediumseagreen')
-            ax.set_title(title)
-            ax.set_xlabel(x_label)
-            ax.set_ylabel(y_label)
-            ax.grid(True)
+            elif selected_chart == "Scatter Plot":
+                if hue_col:
+                    sns.scatterplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
+                else:
+                    sns.scatterplot(data=data, x=x_col, y=y_col, ax=ax)
 
-        fig.tight_layout()
-        canvas = FigureCanvas(fig)
-        self.right_layout.addWidget(canvas)
+            elif selected_chart == "Pie Chart" and not hue_col:
+                # Sprawdzenie warunków dostępności pie chart
+                if x_col == "CLASS" or binning_enabled or agg_func == "count":
+                    values = data[y_col]
+                    labels = data[x_col]
+                    cmap = plt.get_cmap('tab20')
+                    colors = [cmap(i) for i in range(len(labels))]
+                    wedges, texts, autotexts = ax.pie(
+                        values,
+                        labels=None,
+                        autopct='%1.1f%%',
+                        startangle=90,
+                        colors=colors,
+                        pctdistance=1.1
+                    )
+                    if x_col == "CLASS":
+                        class_labels = {'Y': 'Diabetic', 'N': 'Non-Diabetic', 'P': 'Prediction of diabetes'}
+                        legend_labels = [class_labels.get(str(label), str(label)) for label in labels]
+                    else:
+                        legend_labels = list(labels)
+                    ax.legend(wedges, legend_labels, title='Legend', loc='best')
+                    ax.axis('equal')
+                else:
+                    self.log_area.append('Pie Chart is available only for "Classification" or when binning'
+                        ' is enabled or aggregation function is count.')
+                    return
+
+            else:
+                self.log_area.append(f'Unsupported chart type: {selected_chart}')
+                return
+
+            if selected_chart != "Pie Chart":
+                ax.set_xlabel(x_label)
+                ax.set_ylabel(y_label)
+                ax.grid(True)
+
+            if hue_col:
+                ax.set_title(f'{title} (gender differences)')
+            else:
+                ax.set_title(title)
+            fig.tight_layout()
+            canvas = FigureCanvas(fig)
+            self.right_layout.addWidget(canvas)
+            self.log_area.append('The chart has been generated.')
+
+        except Exception as e:
+            self.log_area.append(f"Error while generating chart: {e}")
 
     def on_agg_func_changed(self):
         selected_func = None
@@ -339,7 +435,8 @@ class MainWindow(QWidget):
                 selected_func = func_key
                 break
 
-        if selected_func == 'count':
+        # Ukryj pole, jeśli nie wybrano funkcji lub wybrano count
+        if selected_func in [None, 'count']:
             self.agg_column_combo.setVisible(False)
         else:
             self.agg_column_combo.setVisible(True)
@@ -455,11 +552,17 @@ class MainWindow(QWidget):
     def update_filter_values(self):
         """Aktualizuje opcje filtrowania"""
         filter_col = self.filter_column_combo.currentData()
+
         if not filter_col or self.data is None:
+            # Ukryj wszystkie powiązane widgety jeśli nic nie wybrano
+            self.filter_min_spinbox.hide()
+            self.filter_max_spinbox.hide()
+            self.category_filter_combo.hide()
+            self.category_combo_label.hide()
             return
 
         col_data = self.data[filter_col].dropna()
-
+        # Spinbox dla kolumn z wartościami int
         if pd.api.types.is_integer_dtype(col_data):
             min_val = int(col_data.min())
             max_val = int(col_data.max())
@@ -478,7 +581,7 @@ class MainWindow(QWidget):
 
             self.category_filter_combo.hide()
             self.category_combo_label.hide()
-
+        # Spinbox dla kolumn z wartościami float
         elif pd.api.types.is_float_dtype(col_data):
             min_val = float(col_data.min())
             max_val = float(col_data.max())
@@ -499,7 +602,7 @@ class MainWindow(QWidget):
             self.category_combo_label.hide()
 
         else:
-            # Kolumna nie jest numeryczna → pokaż combo box z wartościami kategorii
+            # Kolumna nie jest numeryczna - combobox z wartościami tekstowymi
             unique_values = sorted(col_data.dropna().unique().tolist())
             self.category_filter_combo.clear()
             for val in unique_values:
@@ -547,29 +650,28 @@ class MainWindow(QWidget):
         if not selected_group_col or self.data is None:
             return
 
-        # Zaktualizuj listę kolumn agregacji (jak wcześniej)
-        numeric_cols = self.data.select_dtypes(include='number').columns.tolist()
+        # Kolumny z etykietą
+        labeled_cols = [col for col in self.data.columns if col in self.column_labels]
 
+        # Kolumny numeryczne z etykietą (dla agregacji)
+        numeric_cols = self.data.select_dtypes(include='number').columns
+        numeric_labeled_cols = [col for col in numeric_cols if col in labeled_cols]
+
+        # Usuń kolumnę grupującą z kolumn do agregacji
+        numeric_labeled_cols = [col for col in numeric_labeled_cols if col != selected_group_col]
+
+        self.agg_column_combo.clear()
+        self.agg_column_combo.addItem('Not selected', userData=None)
+
+        for col in numeric_labeled_cols:
+            label = self.column_labels[col]
+            self.agg_column_combo.addItem(label, userData=col)
+
+        # Obsługa dostępności funkcji agregujących
         if selected_group_col in numeric_cols:
-            if self.agg_column_combo.count() == 0:  # Jeśli pusta, uzupełnij
-                labeled_cols = [col for col in self.data.columns if col in self.column_labels]
-                numeric_labeled_cols = [col for col in numeric_cols if col in labeled_cols]
-                self.agg_column_combo.clear()
-                self.agg_column_combo.addItem('Not selected', userData=None)
-                for col in numeric_labeled_cols:
-                    label = self.column_labels[col]
-                    self.agg_column_combo.addItem(label, userData=col)
-
-            # Wszystkie przyciski agregujące dostępne
             for func_key, btn in self.agg_func_buttons.items():
                 btn.setEnabled(True)
-
-            self.agg_column_combo.setVisible(True)
         else:
-            # Jeśli kolumna grupująca NIE jest numeryczna:
-            self.agg_column_combo.setVisible(False)
-
-            # Tylko "count" może być zaznaczone
             for func_key, btn in self.agg_func_buttons.items():
                 if func_key == 'count':
                     btn.setEnabled(True)
@@ -577,12 +679,42 @@ class MainWindow(QWidget):
                 else:
                     btn.setEnabled(False)
 
+        # Zsynchronizuj widoczność pola agregacji z funkcją agregującą
+        self.on_agg_func_changed()
+
+        # Resetuj wybór kolumny agregacji (na „Not selected”)
+        self.agg_column_combo.setCurrentIndex(0)
+
+        # Pokaż przycisk wykonania grupowania
         self.group_execute_btn.setVisible(True)
-        # Pokaż lub ukryj checkbox "Pokaż przedziały"
+
+        # Pokaż lub ukryj checkbox "Show data in ranges"
         if pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
             self.bin_checkbox.setVisible(True)
         else:
             self.bin_checkbox.setVisible(False)
+
+    def update_gender_checkbox_visibility(self):
+        """
+        Pokazuje checkbox do porównania płci tylko jeśli
+        użytkownik NIE grupuje ani NIE filtruje po kolumnie 'Gender'.
+        """
+        filter_col = self.filter_column_combo.currentData()
+        group_col = self.group_column_combo.currentData()
+
+        show_gender_checkbox = (
+                self.data is not None and
+                'Gender' in self.data.columns and
+                self.data['Gender'].nunique() >= 2 and
+                filter_col != 'Gender' and
+                group_col != 'Gender'
+        )
+
+        self.gender_checkbox.setVisible(show_gender_checkbox)
+
+        # Jeśli checkbox nie powinien być widoczny, to go też odznacz
+        if not show_gender_checkbox:
+            self.gender_checkbox.setChecked(False)
 
     def on_category_combo_changed(self):
         """
