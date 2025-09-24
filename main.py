@@ -129,6 +129,7 @@ class MainWindow(QWidget):
         self.category_filter_combo.hide()
 
         # Grupowanie: wybór kolumn
+
         self.grouping_section_label = QLabel('Group by:')
         self.left_layout.addWidget(self.grouping_section_label)
 
@@ -188,14 +189,20 @@ class MainWindow(QWidget):
 
         # Przyciski w dolnej części okna
         self.chart_type_combo = QComboBox()
-        self.chart_type_combo.addItem("Select chart type")
+        self.chart_type_combo.addItem('Select chart type')
         self.chart_type_combo.addItems([
-            "Bar Chart",
-            "Pie Chart",
-            "Line Chart",
-            "Scatter Plot"
+            'Bar Chart',
+            'Pie Chart',
+            'Line Chart',
+            'Scatter Plot',
+            'Histogram',
+            'Heatmap'
         ])
+
         self.left_layout.addWidget(self.chart_type_combo)
+
+        self.chart_type_combo.currentIndexChanged.connect(self.on_chart_type_changed)
+        self.on_chart_type_changed()  # wywołaj raz na start, żeby stan UI był poprawny
 
         self.group_execute_btn = QPushButton('📈 Generate chart')
         self.group_execute_btn.clicked.connect(self.perform_grouping)
@@ -221,7 +228,9 @@ class MainWindow(QWidget):
 
     # Eksport wyników do pliku CSV.
     def generate_report(self):
-
+        """
+        Generowanie raportu do pliku CSV
+        """
         pass
 
     def on_clear_filters(self):
@@ -270,79 +279,157 @@ class MainWindow(QWidget):
             self.log_area.append('No data to display.')
             return
 
-        group_col = self.group_column_combo.currentData()
+        selected_chart = self.chart_type_combo.currentText()
 
-        # Pobierz zaznaczoną funkcję agregującą
-        agg_func = None
-        for func_key, btn in self.agg_func_buttons.items():
-            if btn.isChecked():
-                agg_func = func_key
-                break
+        # Histogram – używa kolumny filtrowania
+        if selected_chart == "Histogram":
+            filter_col = self.filter_column_combo.currentData()
+            if not filter_col:
+                self.log_area.append('No filter column selected for histogram.')
+                return
 
-        if not group_col:
-            self.log_area.append('Select a column to group by.')
+            self.generate_heatmap_or_hist(df, selected_chart, column=filter_col)
             return
 
-        if not agg_func:
-            self.log_area.append('Select an aggregate function.')
+        # Heatmapa-bez wyboru kolumny
+        elif selected_chart == 'Heatmap':
+            self.generate_heatmap_or_hist(df, selected_chart)
             return
 
-        use_gender = self.gender_checkbox.isChecked()
-
-        # Przygotuj klucz(y) grupowania
-        if use_gender:
-            group_keys = [group_col, 'Gender']
+        # Dla pozostałych wykresów wymagane jest wybranie funkcji agregującej
         else:
-            group_keys = [group_col]
+            group_col = self.group_column_combo.currentData()
+            if not group_col:
+                self.log_area.append('Select a grouping column.')
+                return
 
-        # Obsługa binowania, jeśli zaznaczony checkbox i kolumna numeryczna
-        if self.bin_checkbox.isChecked() and pd.api.types.is_numeric_dtype(df[group_col]):
-            binned_col = self.bin_numeric_column(df[group_col], column_name=group_col)
-            df["_binned_group"] = binned_col
-            # Jeśli używamy podziału na płeć, grupujemy po binowanym plus Gender
-            if use_gender:
-                group_keys = ["_binned_group", 'Gender']
-            else:
-                group_keys = ["_binned_group"]
+            agg_func = None
+            for func_key, btn in self.agg_func_buttons.items():
+                if btn.isChecked():
+                    agg_func = func_key
+                    break
+
+            if not agg_func:
+                self.log_area.append('Select an aggregate function.')
+                return
+
+            use_gender = self.gender_checkbox.isChecked()
+
+            # Przygotuj klucz(e) grupowania
+            group_keys = [group_col, 'Gender'] if use_gender else [group_col]
+
+            # Obsługa binowania
+            if self.bin_checkbox.isChecked() and pd.api.types.is_numeric_dtype(df[group_col]):
+                binned_col = self.bin_numeric_column(df[group_col], column_name=group_col)
+                df["_binned_group"] = binned_col
+                group_keys = ["_binned_group", 'Gender'] if use_gender else ["_binned_group"]
+
+            try:
+                if agg_func == "count":
+                    grouped = df.groupby(group_keys, observed=True).size().reset_index(name='Number of patients')
+                    y_col = 'Number of patients'
+                    y_label = 'Number of patients'
+                else:
+                    agg_col = self.agg_column_combo.currentData()
+                    if not agg_col:
+                        self.log_area.append('Select a column to aggregate.')
+                        return
+
+                    grouped = df.groupby(group_keys, observed=True).agg({agg_col: agg_func}).reset_index()
+                    y_col = agg_col
+                    y_label = self.column_labels.get(agg_col, agg_col)
+
+                grouped = grouped.sort_values(by=group_keys)
+                agg_label = self.agg_func_buttons[agg_func].text()
+                x_label = self.column_labels.get(group_col, group_col)
+                title = f"{agg_label} by {x_label.lower()}"
+                y_axis_label = y_label
+
+                x_col_name = group_keys[0] if "_binned_group" not in df.columns else "_binned_group"
+                hue_col = 'Gender' if use_gender else None
+
+                self.generate_chart(
+                    data=grouped,
+                    x_col=x_col_name,
+                    y_col=y_col,
+                    x_label=x_label,
+                    y_label=y_axis_label,
+                    title=title,
+                    hue_col=hue_col,
+                    agg_func=agg_func,
+                    binning_enabled=self.bin_checkbox.isChecked()
+                )
+
+            except Exception as e:
+                self.log_area.append(f'Error while grouping: {e}')
+
+    def generate_heatmap_or_hist(self, data, selected_chart, column=None):
+        """
+        Generuje histogram lub heatmapę parametrów biochemicznych.
+        Dla histogramu oczekuje kolumny numerycznej do rozkładu.
+        Dla heatmapy generuje mapę korelacji.
+        """
+        fig = Figure(figsize=(7, 5))
+        ax = fig.add_subplot(111)
+        col_name = self.column_labels.get(column, column)
 
         try:
-            if agg_func == "count":
-                grouped = df.groupby(group_keys, observed=True).size().reset_index(name='Number of patients')
-                y_col = 'Number of patients'
-                y_label = 'Number of patients'
-            else:
-                agg_col = self.agg_column_combo.currentData()
-                if not agg_col:
-                    self.log_area.append('Select a column to aggregate.')
+            if selected_chart == 'Histogram':
+                # Sprawdź, czy podano kolumnę
+                if not column or column not in data.columns:
+                    self.log_area.append('Invalid column selected for histogram.')
                     return
 
-                grouped = df.groupby(group_keys, observed=True).agg({agg_col: agg_func}).reset_index()
-                y_col = agg_col
-                y_label = self.column_labels.get(agg_col, agg_col)
+                values = data[column].dropna()
+                if values.empty:
+                    self.log_area.append('No data available for histogram.')
+                    return
 
-            grouped = grouped.sort_values(by=group_keys)
-            agg_label = self.agg_func_buttons[agg_func].text()
-            x_label = self.column_labels.get(group_col, group_col)
-            title = f"{agg_label} by {x_label.lower()}"
-            y_axis_label = y_label
+                # Oblicz statystyki
+                mean_val = values.mean()
+                median_val = values.median()
+                std_val = values.std()
+                min_val = values.min()
+                max_val = values.max()
 
-            x_col_name = group_keys[0] if "_binned_group" not in df.columns else "_binned_group"
-            hue_col = 'Gender' if use_gender else None
+                # Rysuj histogram
+                ax.hist(values, bins=30, color='skyblue', edgecolor='black')
 
-            self.generate_chart(
-                data=grouped,
-                x_col=x_col_name,
-                y_col=y_col,
-                x_label=x_label,
-                y_label=y_axis_label,
-                title=title,
-                hue_col=hue_col,
-                agg_func=agg_func,
-                binning_enabled=self.bin_checkbox.isChecked()
-            )
+                # Dodaj linie pionowe
+                ax.axvline(mean_val, color='red', linestyle='--', linewidth=2, label=f"Mean: {mean_val:.2f}")
+                ax.axvline(median_val, color='green', linestyle='-.', linewidth=2, label=f"Median: {median_val:.2f}")
+
+                # Dodaj tytuł, etykiety i legendę
+                ax.set_title(f'Histogram of {col_name.lower()}')
+                ax.set_xlabel(col_name)
+                ax.set_ylabel('Frequency')
+
+                ax.legend(loc='upper right', title=f'Std: {std_val:.2f}'
+                                                   f'\nMax: {max_val:.2f}'
+                                                   f'\nMin:{min_val:.2f}')
+                ax.grid(True)
+
+            elif selected_chart == 'Heatmap':
+                numeric_data = data.select_dtypes(include='number')
+                if numeric_data.shape[1] < 2:
+                    self.log_area.append('Not enough numeric columns for heatmap.')
+                    return
+
+                corr = numeric_data.corr()
+                sns.heatmap(corr, annot=True, fmt=".2f", cmap='coolwarm', ax=ax)
+                ax.set_title('Heatmap of biochemical parameters')
+
+            else:
+                self.log_area.append(f"Unsupported distribution chart type: {selected_chart}")
+                return
+
+            fig.tight_layout()
+            canvas = FigureCanvas(fig)
+            self.right_layout.addWidget(canvas)
+            self.log_area.append(f'{selected_chart} has been generated.')
 
         except Exception as e:
-            self.log_area.append(f'Error while grouping: {e}')
+            self.log_area.append(f'Error generating {selected_chart}: {e}')
 
     def generate_chart(self, data, x_col, y_col, x_label, y_label, title, hue_col=None, agg_func=None,
                        binning_enabled=False):
@@ -352,9 +439,9 @@ class MainWindow(QWidget):
         - oraz dla innych kolumn tylko gdy binning_enabled=True lub agg_func == 'count'.
         """
         selected_chart = self.chart_type_combo.currentText()
-        palette = {"F": "pink", "M": "blue"}
+        palette = {'F': '#fe46a5', 'M': '#82cafc'}
 
-        if selected_chart == "Select chart type":
+        if selected_chart == 'Select chart type':
             self.log_area.append('Please select a chart type before generating.')
             return
 
@@ -362,27 +449,27 @@ class MainWindow(QWidget):
         ax = fig.add_subplot(111)
 
         try:
-            if selected_chart == "Bar Chart":
+            if selected_chart == 'Bar Chart':
                 if hue_col:
                     sns.barplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
                 else:
                     sns.barplot(data=data, x=x_col, y=y_col, ax=ax)
 
-            elif selected_chart == "Line Chart":
+            elif selected_chart == 'Line Chart':
                 if hue_col:
                     sns.lineplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
                 else:
                     sns.lineplot(data=data, x=x_col, y=y_col, ax=ax)
 
-            elif selected_chart == "Scatter Plot":
+            elif selected_chart == 'Scatter Plot':
                 if hue_col:
                     sns.scatterplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
                 else:
                     sns.scatterplot(data=data, x=x_col, y=y_col, ax=ax)
 
-            elif selected_chart == "Pie Chart" and not hue_col:
+            elif selected_chart == 'Pie Chart' and not hue_col:
                 # Sprawdzenie warunków dostępności pie chart
-                if x_col == "CLASS" or binning_enabled or agg_func == "count":
+                if x_col == 'CLASS' or binning_enabled or agg_func == 'count':
                     values = data[y_col]
                     labels = data[x_col]
                     cmap = plt.get_cmap('tab20')
@@ -391,11 +478,10 @@ class MainWindow(QWidget):
                         values,
                         labels=None,
                         autopct='%1.1f%%',
-                        startangle=90,
                         colors=colors,
                         pctdistance=1.1
                     )
-                    if x_col == "CLASS":
+                    if x_col == 'CLASS':
                         class_labels = {'Y': 'Diabetic', 'N': 'Non-Diabetic', 'P': 'Prediction of diabetes'}
                         legend_labels = [class_labels.get(str(label), str(label)) for label in labels]
                     else:
@@ -404,14 +490,14 @@ class MainWindow(QWidget):
                     ax.axis('equal')
                 else:
                     self.log_area.append('Pie Chart is available only for "Classification" or when binning'
-                        ' is enabled or aggregation function is count.')
+                                         ' is enabled or aggregation function is count.')
                     return
 
             else:
                 self.log_area.append(f'Unsupported chart type: {selected_chart}')
                 return
 
-            if selected_chart != "Pie Chart":
+            if selected_chart != 'Pie Chart':
                 ax.set_xlabel(x_label)
                 ax.set_ylabel(y_label)
                 ax.grid(True)
@@ -427,6 +513,29 @@ class MainWindow(QWidget):
 
         except Exception as e:
             self.log_area.append(f"Error while generating chart: {e}")
+
+    def on_chart_type_changed(self):
+        selected_chart = self.chart_type_combo.currentText()
+        disable_grouping = selected_chart in ["Histogram", "Biochemical Heatmap"]
+
+        # Ukryj/pokaż"Group by:"
+        self.grouping_section_label.setVisible(not disable_grouping)
+
+        # Ukryj/pokaż combobox do kolumny grupowania
+        self.group_column_combo.setVisible(not disable_grouping)
+
+        # Ukryj/pokaż combobox do kolumny agregacji
+        self.agg_column_combo.setVisible(not disable_grouping)
+
+        # Ukryj/pokaż przyciski funkcji agregujących (QRadioButton w gridzie)
+        self.agg_func_group.setExclusive(False)
+        for btn in self.agg_func_buttons.values():
+            btn.setVisible(not disable_grouping)
+        self.agg_func_group.setExclusive(True)
+
+        # Checkboxy jeśli masz np. płeć, binowanie itp.
+        self.gender_checkbox.setVisible(not disable_grouping)
+        self.bin_checkbox.setVisible(not disable_grouping)
 
     def on_agg_func_changed(self):
         selected_func = None
