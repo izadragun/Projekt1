@@ -2,20 +2,18 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog,
     QVBoxLayout, QHBoxLayout, QTextEdit, QGroupBox, QComboBox,
     QRadioButton, QButtonGroup, QGridLayout, QDoubleSpinBox, QCheckBox)
-from matplotlib import pyplot as plt
-
-from pandas.api.types import CategoricalDtype
-
 import sys
 import pandas as pd
+from pandas.api.types import CategoricalDtype
+import numpy as np
 import seaborn as sns
+from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 
 # Wczytanie danych z pliku CSV.
 def load_data(path):
-
     try:
         data = pd.read_csv(path, delimiter=',')
         return data
@@ -35,7 +33,7 @@ class MainWindow(QWidget):
         self.main_layout = QVBoxLayout()
         self.center_layout = QHBoxLayout()
 
-        # Lewa część: przyciski filtrowania
+        # Lewa część: filtrowanie i grupowanie
         self.left_box = QGroupBox('🔍 Filters and grouping')
         self.left_layout = QVBoxLayout()
 
@@ -66,20 +64,29 @@ class MainWindow(QWidget):
         self.button = QPushButton('📂 Select CSV File')
         self.button.clicked.connect(self.select_file)
 
-        # === LEWA CZĘŚĆ: FILTRY I GRUPOWANIE ===
+        # LEWA CZĘŚĆ: FILTRY I GRUPOWANIE ===
 
         self.column_labels = {'Gender': 'Gender',
                               'AGE': 'Age',
-                              'Urea': 'Urea level in blood (mmol/L)',
-                              'Cr': 'Creatinine ratio (μmol/L)',
-                              'HbA1c': 'HbA1c level (%)',
-                              'Chol': 'Cholesterol (mmol/L)',
-                              'TG': 'Triglycerides (mmol/L)',
-                              'HDL': 'HDL (mmol/L)',
-                              'LDL': 'LDL (mmol/L)',
-                              'VLDL': 'VLDL (mmol/L)',
+                              'Urea': 'Urea level in blood',
+                              'Cr': 'Creatinine',
+                              'HbA1c': 'HbA1c level',
+                              'Chol': 'Cholesterol',
+                              'TG': 'Triglycerides',
+                              'HDL': 'HDL',
+                              'LDL': 'LDL',
+                              'VLDL': 'VLDL',
                               'BMI': 'BMI',
-                              'CLASS': 'Classification'}
+                              'CLASS': 'Diabetes risk classification'}
+        self.column_units = {'Urea': 'mmol/L',
+                             'AGE': 'years',
+                             'Cr': 'μmol/L',
+                             'HbA1c': '%',
+                             'Chol': 'mmol/L',
+                             'TG': 'mmol/L',
+                             'HDL': 'mmol/L',
+                             'LDL': 'mmol/l',
+                             'VLDL': 'mmol/L'}
         # Opcje filtrowania
         self.left_layout.addWidget(QLabel('Filter by'))
 
@@ -163,6 +170,7 @@ class MainWindow(QWidget):
                 row += 1
 
         self.left_layout.addLayout(agg_func_layout)
+        # Przyciski w dolnej części okna
 
         # Checkbox do wyświetlania różnic pomiędzy kobietami a mężczyznami
 
@@ -171,13 +179,15 @@ class MainWindow(QWidget):
         self.left_layout.addWidget(self.gender_checkbox)
         self.filter_column_combo.currentIndexChanged.connect(self.update_checkboxes_visibility)
         self.group_column_combo.currentIndexChanged.connect(self.update_checkboxes_visibility)
+        self.gender_checkbox.setVisible(False)
 
         # Checkbox do wyświetlania danych w przedziałach
         self.bin_checkbox = QCheckBox('📦 Show data in ranges')
         self.bin_checkbox.setChecked(True)
         self.left_layout.addWidget(self.bin_checkbox)
+        self.bin_checkbox.setVisible(False)
 
-        # Przyciski w dolnej części okna
+        # Przyciski do generowania wykresów
         self.chart_type_combo = QComboBox()
         self.chart_type_combo.addItem('Select chart type')
         self.chart_type_combo.addItems([
@@ -192,12 +202,14 @@ class MainWindow(QWidget):
         self.left_layout.addWidget(self.chart_type_combo)
 
         self.chart_type_combo.currentIndexChanged.connect(self.chart_type_changed)
-        self.chart_type_changed()  # wywołaj raz na start, żeby stan UI był poprawny
+        self.chart_type_changed()
 
         self.group_execute_btn = QPushButton('📈 Generate chart')
         self.group_execute_btn.clicked.connect(self.update_chart)
         self.group_execute_btn.setVisible(False)
         self.left_layout.addWidget(self.group_execute_btn)
+
+        # Dodatkowe funkcje
 
         self.generate_report_btn = QPushButton('📄 Generate report')
         self.generate_report_btn.clicked.connect(self.generate_report)
@@ -252,6 +264,9 @@ class MainWindow(QWidget):
         self.log_area.append('Filters and grouping have been reset.')
 
     def clear_right_panel(self):
+        """
+        Usuwa wszystkie wykresy z prawego panelu (right_layout).
+        """
         for i in reversed(range(self.right_layout.count())):
             widget_to_remove = self.right_layout.itemAt(i).widget()
             if widget_to_remove is not None:
@@ -260,7 +275,7 @@ class MainWindow(QWidget):
     # Funkcje dotyczące grupowania i filtrowania danych
     def get_filtered_data(self):
         """
-        Filtrowanie danych według wybranych kryteriów.
+        Zwraca dane przefiltrowane według wybranej kolumny i kryteriów.
         """
         if self.data is None:
             return None
@@ -287,22 +302,6 @@ class MainWindow(QWidget):
 
         return filtered_df
 
-    def get_grouped_data(self):
-        """
-        Zwraca dane przefiltrowane lub agregowane w zależności od typu wykresu.
-        """
-        df = self.get_filtered_data()
-        if df is None or df.empty:
-            return None
-
-        selected_chart = self.chart_type_combo.currentText()
-
-        if selected_chart in ['Histogram', 'Heatmap']:
-            return df
-
-        grouped_df = self.prepare_aggregated_data()
-        return grouped_df
-
     def get_selected_agg_func(self):
         """
         Zwraca klucz wybranej funkcji agregującej lub None.
@@ -314,7 +313,7 @@ class MainWindow(QWidget):
 
     def aggregate_grouped_data(self, df, group_cols, agg_col, agg_func):
         """
-        Grupuje i agreguje dane zgodnie z parametrami.
+        Grupuje i agreguje dane według podanych kolumn i funkcji agregującej.
         """
         try:
             if agg_func == 'count':
@@ -330,7 +329,7 @@ class MainWindow(QWidget):
 
     def prepare_aggregated_data(self):
         """
-        Przygotowuje dane po filtrowaniu, binowaniu i agregacji.
+        Zwraca dane po filtrowaniu, binowaniu i agregacji według wybranych parametrów.
         """
         df = self.get_filtered_data()
         if df is None or df.empty:
@@ -365,67 +364,63 @@ class MainWindow(QWidget):
             return df, binned_col_name
         return df, group_col
 
+    import numpy as np
+    from pandas.api.types import CategoricalDtype
+
     def bin_numeric_column(self, series, column_name=None):
         """
-        Dzieli kolumnę numeryczną na przedziały.
+        Dzieli kolumnę numeryczną na przedziały z poprawnym uwzględnieniem wartości granicznych.
         """
         try:
-            if column_name == 'BMI':
-                bins = [0, 18.5, 24.9, 29.9, 34.9, 39.9, 100]
-                labels = ['<18.5', '18.5-24.9', '25.0-29.9', '30.0-34.9'
-                                                             '35.0-39.9', '40.0≤']
-                cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
+            # Definicje przedziałów i etykiet dla poszczególnych kolumn
+            bin_configs = {
+                'BMI': {
+                    'bins': [0, 18.5, 24.9, 29.9, 34.9, 39.9, np.inf],
+                    'labels': ['<18.5', '18.5-24.9', '25.0-29.9', '30.0-34.9', '35.0-39.9', '40.0+']
+                },
+                'AGE': {
+                    'bins': [20, 30, 40, 50, 60, 70, np.inf],
+                    'labels': ['20-29', '30-39', '40-49', '50-59', '60-69', '70+']
+                },
+                'Chol': {
+                    'bins': [0, 4.99, 5.99, 6.99, np.inf],
+                    'labels': ['<5', '5-5.99', '6-6.99', '7+']
+                },
+                'Cr': {
+                    'bins': [0, 49.99, 99.99, 149.99, 199.99, np.inf],
+                    'labels': ['<50', '50-99.99', '100-149.99', '150-199.99', '200+']
+                },
+                'HbA1c': {
+                    'bins': [0, 5.6, 6.49, np.inf],
+                    'labels': ['<5.7', '5.7-6.49', '6.5+']
+                },
+                'TG': {
+                    'bins': [0, 1.69, 2.99, 3.99, 4.99, np.inf],
+                    'labels': ['<1.7', '1.7-2.99', '3-3.99', '4-4.99', '5+']
+                },
+                'HDL': {
+                    'bins': [0, 1.19, 2.19, 3.99, 4.99, np.inf],
+                    'labels': ['<1.2', '1.2-2.19', '2.2-3.99', '4-4.99', '5+']
+                },
+                'LDL': {
+                    'bins': [0, 2.99, 3.99, 4.99, 5.99, np.inf],
+                    'labels': ['<3', '3-3.99', '4-4.99', '5-5.99', '6+']
+                },
+                'VLDL': {
+                    'bins': [0, 0.79, 2.99, 4.99, np.inf],
+                    'labels': ['<0.8', '0.8-2.99', '3-4.99', '5+']
+                },
+                'Urea': {
+                    'bins': [0, 1.99, 2.99, 3.99, 4.99, 5.99, np.inf],
+                    'labels': ['<2', '2-2.99', '3-3.99', '4-4.99', '5-5.99', '6+']
+                }
+            }
 
-            elif column_name == 'AGE':
-                bins = [20, 30, 40, 50, 60, 70, 80]
-                labels = ['20-29', '30-39', '40-49', '50-59', '60-69', '70+']
+            if column_name in bin_configs:
+                bins = bin_configs[column_name]['bins']
+                labels = bin_configs[column_name]['labels']
                 cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
-
-            elif column_name == 'Chol':
-                bins = [0, 4.99, 5.99, 6.99, 12]
-                labels = ['<5', '5-5.99', '6-6.99', '7≤ ']
-                cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
-
-            elif column_name == 'Cr':
-                bins = [0, 49.99, 99.99, 149.99, 199.99, 800]
-                labels = ['<50', '50-99.99', '100-149.99', '150-199.99', '200≤ ']
-                cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
-
-            elif column_name == 'HbA1c':
-                bins = [0, 5.6, 6.49, 16]
-                labels = ['<5.70', '5.7-6.49', '6.5≤']
-                cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
-
-            elif column_name == 'TG':
-                bins = [0, 1.69, 2.99, 3.99, 4.99, 14]
-                labels = ['<1.70', '1.70-2.99', '3-3.99', '4-4.99', '5≤']
-                cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
-            elif column_name == 'HDL':
-                bins = [0, 1.19, 2.19, 3.99, 4.99, 10]
-                labels = ['<1.2', '1.2-2.19', '2.20-3.99', '4-4.99', '5≤']
-                cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
-            elif column_name == 'LDL':
-                bins = [0, 2.99, 3.99, 4.99, 5.99, 10]
-                labels = ['<3', '3-3.99', '4-4.99', '5-5.99', '6≤']
-                cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
-            elif column_name == 'VLDL':
-                bins = [0, 0.79, 2.99, 4.99, 35]
-                labels = ['<0.8', '0.8-2.99', '3-4.99', '5≤']
-                cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
-            elif column_name == 'Urea':
-                bins = [0, 1.99, 2.99, 3.99, 4.99, 5.99, 40]
-                labels = ['<2', '2-2.99', '3-3.99', '4-4.99', '5-5.99', '6≤']
-                cat_type = CategoricalDtype(categories=labels, ordered=True)
-                return pd.cut(series, bins=bins, labels=labels).astype(cat_type)
+                return pd.cut(series, bins=bins, labels=labels, right=False, include_lowest=True).astype(cat_type)
             else:
                 # Dla pozostałych: niezmienione
                 return series
@@ -442,26 +437,21 @@ class MainWindow(QWidget):
         self.clear_right_panel()
         selected_chart = self.chart_type_combo.currentText()
 
-        if selected_chart == 'Histogram':
-            df = self.get_filtered_data()
-            if df is None or df.empty:
-                self.log_area.append('No data to display.')
-                return
-            filter_col = self.filter_column_combo.currentData()
-            if not filter_col:
-                self.log_area.append('No filter column selected for histogram.')
-                return
-            self.current_plot_data = df
-            self.generate_hist(df, selected_chart, column=filter_col)
-
-        elif selected_chart == 'Heatmap':
+        if selected_chart in ['Histogram', 'Heatmap']:
             df = self.get_filtered_data()
             if df is None or df.empty:
                 self.log_area.append('No data to display.')
                 return
             self.current_plot_data = df
-            self.generate_heatmap(df, selected_chart)
 
+            if selected_chart == 'Histogram':
+                filter_col = self.filter_column_combo.currentData()
+                if not filter_col:
+                    self.log_area.append('No filter column selected for histogram.')
+                    return
+                self.generate_hist(df, column=filter_col)
+            else:
+                self.generate_heatmap(df)
         else:
             self.handle_other_charts()
 
@@ -477,113 +467,104 @@ class MainWindow(QWidget):
         group_col = self.group_column_combo.currentData()
         agg_func = self.get_selected_agg_func()
         if not agg_func:
+            self.log_area.append('No aggregation function selected.')
             return
 
         x_col = f'binned_{group_col}' if self.bin_checkbox.isChecked() else group_col
         y_col = grouped.columns[-1]
+        x_unit = self.column_units.get(group_col, '')
+        y_unit = self.column_units.get(y_col, '') if agg_func != 'count' else ''
 
         x_label = self.column_labels.get(group_col, group_col)
-        y_label = y_col
-        title = f'{self.agg_func_buttons[agg_func].text()} by {x_label}'
+        y_label = self.column_labels.get(y_col, y_col)
+        if agg_func == 'count':
+            title = f'{self.agg_func_buttons[agg_func].text()} by {x_label}'
+        else:
+            title = f'{self.agg_func_buttons[agg_func].text()} values of {y_label} by {x_label}'
         hue_col = 'Gender' if self.gender_checkbox.isChecked() else None
 
         self.generate_chart(
             data=grouped,
             x_col=x_col,
             y_col=y_col,
-            x_label=x_label,
-            y_label=y_label,
+            x_label=f'{x_label} ({x_unit})' if x_unit else x_label,
+            y_label=f'{y_label} ({y_unit})' if y_unit else y_label,
             title=title,
             hue_col=hue_col,
             agg_func=agg_func,
-            binning_enabled=self.bin_checkbox.isChecked(),
         )
 
-
-
-    def generate_hist(self, data, selected_chart, column):
+    def generate_hist(self, data, column):
         """
-        Generuje histogram
+        Generuje histogram dla wybranej kolumny numerycznej z oznaczeniem średniej i mediany.
         """
 
-        if selected_chart == 'Histogram':
-            if not column or column not in data.columns:
-                self.log_area.append('Invalid column selected for histogram.')
-                return
+        if not column or column not in data.columns:
+            self.log_area.append('Invalid column selected for histogram.')
+            return
 
-            if not pd.api.types.is_numeric_dtype(data[column]):
-                self.log_area.append(f'Column "{column}" is not numeric and cannot be used for histogram.')
-                return
+        if not pd.api.types.is_numeric_dtype(data[column]):
+            self.log_area.append(f'Column "{column}" is not numeric and cannot be used for histogram.')
+            return
 
         fig = Figure(figsize=(10, 6))
         ax = fig.add_subplot(111)
         col_name = self.column_labels.get(column, column)
 
         try:
-            if selected_chart == 'Histogram':
-                # Sprawdź, czy podano kolumnę
-                if not column or column not in data.columns:
-                    self.log_area.append('Invalid column selected for histogram.')
-                    return
+            # Oblicz statystyki
+            stats = self.statistics(data, column)
 
-                # Oblicz statystyki
-                stats = self.statistics(data, column)
+            # Rysuj histogram
+            sns.histplot(
+                data=data,
+                x=column,
+                bins=30,
+                color='skyblue',
+                edgecolor='black',
+                ax=ax
+            )
 
-                # Rysuj histogram
+            # Dodaj linie pionowe dla średniej i mediany
+            ax.axvline(stats['mean'], color='red', linestyle='--', linewidth=2,
+                       label=f"Mean: {stats['mean']:.2f}")
+            ax.axvline(stats['median'], color='green', linestyle=':', linewidth=2,
+                       label=f"Median: {stats['median']:.2f}")
 
-                sns.histplot(
-                    data=data,
-                    x=column,
-                    bins=30,
-                    color='skyblue',
-                    edgecolor='black',
-                    ax=ax
-                )
+            # Dodaj tytuł, etykiety i legendę
+            ax.set_title(f'Histogram of {col_name}')
+            ax.set_xlabel(col_name)
+            ax.set_ylabel('Frequency')
+            ax.legend()
+            ax.grid(True)
+            self.render_figure(fig)
+            self.log_area.append(f'Histogram has been generated.')
 
-                # Dodaj linie pionowe dla średniej i mediany
-                ax.axvline(stats['mean'], color='red', linestyle='--', linewidth=2, label=f"Mean: {stats['mean']:.2f}")
-                ax.axvline(stats['median'], color='green', linestyle='-.', linewidth=2,
-                           label=f"Median: {stats['median']:.2f}")
-
-                # Dodaj tytuł, etykiety i legendę
-                ax.set_title(f'Histogram of {col_name}')
-                ax.set_xlabel(col_name)
-                ax.set_ylabel('Frequency')
-
-                ax.grid(True)
-                self.render_figure(fig)
-                self.log_area.append(f'{selected_chart} has been generated.')
         except Exception as e:
-            self.log_area.append(f'Error generating {selected_chart}: {e}')
+            self.log_area.append(f'Error generating histogram: {e}')
 
-    def generate_heatmap(self, data, selected_chart):
+    def generate_heatmap(self, data):
         """
-        Generuje heatmapę
+        Generuje heatmapę korelacji dla danych numerycznych.
         """
         fig = Figure(figsize=(10, 6))
         ax = fig.add_subplot(111)
         try:
-            if selected_chart == 'Heatmap':
-                numeric_data = data.select_dtypes(include='number')
-                if numeric_data.shape[1] < 2:
-                    self.log_area.append('Not enough numeric columns for heatmap.')
-                    return
-
-                corr = numeric_data.corr()
-                sns.heatmap(corr, annot=True, fmt=".2f", cmap='coolwarm', ax=ax)
-                ax.set_title('Heatmap of biochemical parameters')
-
-            else:
-                self.log_area.append(f"Unsupported distribution chart type: {selected_chart}")
+            numeric_data = data.select_dtypes(include='number')
+            if numeric_data.shape[1] < 2:
+                self.log_area.append('Not enough numeric columns for heatmap.')
                 return
 
-            self.render_figure(fig)
-            self.log_area.append(f'{selected_chart} has been generated.')
-        except Exception as e:
-            self.log_area.append(f'Error generating {selected_chart}: {e}')
+            corr = numeric_data.corr()
+            sns.heatmap(corr, annot=True, fmt=".2f", cmap='coolwarm', ax=ax)
+            ax.set_title('Heatmap of biochemical parameters')
 
-    def generate_chart(self, data, x_col, y_col, x_label, y_label, title, hue_col=None, agg_func=None,
-                       binning_enabled=False):
+            self.render_figure(fig)
+            self.log_area.append('Heatmap has been generated.')
+        except Exception as e:
+            self.log_area.append(f'Error generating heatmap: {e}')
+
+    def generate_chart(self, data, x_col, y_col, x_label, y_label, title, hue_col=None, agg_func=None):
         """
         Generowanie pozostałych wykresów na podstawie wybranego typu.
         """
@@ -608,24 +589,30 @@ class MainWindow(QWidget):
             if not plot_func:
                 return self.log_area.append(f'Unsupported chart type: {selected_chart}')
 
-            plot_func(ax, data, x_col, y_col, hue_col, agg_func, binning_enabled)
+            # Wywołanie funkcji wykresu z obsługą sprawdzenia zwrotu
+            if selected_chart == 'Pie Chart':
+                success = plot_func(ax, data, x_col, y_col, agg_func)
+            else:
+                success = plot_func(ax, data, x_col, y_col, hue_col)
+                if success:
+                    ax.set_xlabel(x_label)
+                    ax.set_ylabel(y_label)
+                    ax.grid(True)
 
-            # Ustawienia końcowe (wykresy inne niż Pie Chart)
-            if selected_chart != 'Pie Chart':
-                ax.set_xlabel(x_label)
-                ax.set_ylabel(y_label)
-                ax.grid(True)
+            if not success:
+                # Jeśli wykres się nie wygenerował, zakończ i nie renderuj
+                return
 
-            full_title = f'{title} (gender differences)' if hue_col else title
-            ax.set_title(full_title)
+            full_title = title + (' (gender differences)' if hue_col else '')
+            ax.set_title(full_title, pad=20)
 
             self.render_figure(fig)
-            self.log_area.append('The chart has been generated.')
+            self.log_area.append(f'{selected_chart} has been generated.')
 
         except Exception as e:
             self.log_area.append(f"Error while generating chart: {e}")
 
-    def bar_chart(self, ax, data, x_col, y_col, hue_col, agg_func=None, binning_enabled=False):
+    def bar_chart(self, ax, data, x_col, y_col, hue_col):
         palette = {'F': '#fe46a5', 'M': '#82cafc'}
         if hue_col:
             sns.barplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
@@ -633,7 +620,7 @@ class MainWindow(QWidget):
             sns.barplot(data=data, x=x_col, y=y_col, ax=ax)
         return True
 
-    def line_chart(self, ax, data, x_col, y_col, hue_col, agg_func, binning_enabled):
+    def line_chart(self, ax, data, x_col, y_col, hue_col):
         palette = {'F': '#fe46a5', 'M': '#82cafc'}
         if hue_col:
             sns.lineplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
@@ -641,7 +628,7 @@ class MainWindow(QWidget):
             sns.lineplot(data=data, x=x_col, y=y_col, ax=ax)
         return True
 
-    def scatter_plot(self, ax, data, x_col, y_col, hue_col, agg_func, binning_enabled):
+    def scatter_plot(self, ax, data, x_col, y_col, hue_col):
         palette = {'F': '#fe46a5', 'M': '#82cafc'}
         if hue_col:
             sns.scatterplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
@@ -649,16 +636,23 @@ class MainWindow(QWidget):
             sns.scatterplot(data=data, x=x_col, y=y_col, ax=ax)
         return True
 
-    def pie_chart(self, ax, data, x_col, y_col, hue_col, agg_func, binning_enabled):
+    def pie_chart(self, ax, data, x_col, y_col, agg_func):
+
+        binning_enabled = self.bin_checkbox.isChecked()
+        hue_col = self.gender_checkbox.isChecked()
+        is_numeric_col = pd.api.types.is_numeric_dtype(data[x_col])
+        agg_is_count = (agg_func == 'count')
         if hue_col:
             self.log_area.append('Pie Chart does not support grouping by gender')
-            return
+            return False
 
-        if x_col != 'CLASS' and not (binning_enabled or agg_func == 'count'):
-            self.log_area.append('Pie Chart is available only for "CLASS" or when binning is '
-                                 'enabled or aggregation is "Number of patietns."')
-            return
+        if not agg_is_count:
+            self.log_area.append('Pie Chart can only be generated with aggregation function "count".')
+            return False
 
+        if is_numeric_col and not binning_enabled:
+            self.log_area.append('Pie Chart requires binning enabled for numeric columns.')
+            return False
         try:
             values = data[y_col]
             labels = data[x_col]
@@ -670,18 +664,30 @@ class MainWindow(QWidget):
                 labels=None,
                 autopct='%1.1f%%',
                 colors=colors,
-                pctdistance=1.1
+                pctdistance=1.2
             )
 
             if x_col == 'CLASS':
-                class_labels = {'Y': 'Diabetic', 'N': 'Non-Diabetic', 'P': 'Prediction of diabetes'}
+                class_labels = {'Y': 'Diabetic', 'N': 'Non-Diabetic', 'P': 'Prediction\n of diabetes'}
                 legend_labels = [class_labels.get(str(label), str(label)) for label in labels]
             else:
                 legend_labels = list(labels)
 
-            ax.legend(wedges, legend_labels, title='Legend', loc='best')
-            ax.axis('equal')
+            original_col = x_col.replace('binned_', '') if x_col.startswith('binned_') else x_col
+            column_label = self.column_labels.get(original_col, original_col)
+            unit = self.column_units.get(original_col, '')
+            legend_title = f'Legend – {column_label} ({unit})' if unit else f'Legend – {column_label}'
 
+            # Tworzenie legendy
+            ax.legend(
+                wedges,
+                legend_labels,
+                title=legend_title,
+                loc='center left',
+                bbox_to_anchor=(1, 0.5)
+            )
+            ax.figure.subplots_adjust(right=0.75)
+            ax.axis('equal')
             return True
 
         except Exception as e:
@@ -692,7 +698,6 @@ class MainWindow(QWidget):
         """
         Wyświetla wykres na panelu po prawej stronie.
         """
-
         canvas = FigureCanvas(fig)
         self.right_layout.addWidget(canvas)
 
@@ -705,7 +710,7 @@ class MainWindow(QWidget):
             self.log_area.append('No data available for statistics.')
             return None
 
-        s = {
+        stats = {
             'mean': values.mean(),
             'median': values.median(),
             'std': values.std(),
@@ -714,13 +719,15 @@ class MainWindow(QWidget):
         }
         self.log_area.append('--- Statistics ---')
         self.log_area.append(
-            f'Mean: {s["mean"]:.2f}\n'
-            f'Median: {s["median"]:.2f}\n'
-            f'Std: {s["std"]:.2f}\n'
-            f'Max: {s["max"]:.2f}\n'
-            f'Min: {s["min"]:.2f}\n'
+            '\n'.join([
+                f"Mean: {stats['mean']:.2f}",
+                f"Median: {stats['median']:.2f}",
+                f"Std: {stats['std']:.2f}",
+                f"Min: {stats['min']:.2f}",
+                f"Max: {stats['max']:.2f}",
+            ])
         )
-        return s
+        return stats
 
     # Dostosowywanie widoczności opcji interfejsu w zależności od typu wykresu i danych
     def chart_type_changed(self):
@@ -820,9 +827,11 @@ class MainWindow(QWidget):
 
         self.group_column_combo.clear()
         self.group_column_combo.addItem('Not selected', userData=None)
+        self.group_column_combo.setCurrentIndex(0)
 
         self.agg_column_combo.clear()
         self.agg_column_combo.addItem('Not selected', userData=None)
+        self.agg_column_combo.setCurrentIndex(0)
 
         # Kolumny dostępne w słowniku etykiet
         labeled_cols = [col for col in self.data.columns if col in self.column_labels]
@@ -958,7 +967,7 @@ class MainWindow(QWidget):
 
     def update_checkboxes_visibility(self):
         """
-        Ustawia widoczność checkboxów 'gender' i 'bin' w zależności od:
+        Ustawia widoczność checkboxów w zależności od:
         - wybranego wykresu,
         - danych,
         - typu kolumny grupującej (dla bin),
@@ -990,14 +999,12 @@ class MainWindow(QWidget):
 
         show_bin = chart_allows_bin and group_col_is_numeric
 
-        # --- Widoczność i resetowanie zaznaczeń ---
+        # --- Widoczność i ustawienia checkboxów ---
         self.gender_checkbox.setVisible(show_gender)
-        self.bin_checkbox.setVisible(show_bin)
+        self.gender_checkbox.setChecked(False)  # zawsze odznaczony
 
-        if not show_gender:
-            self.gender_checkbox.setChecked(False)
-        if not show_bin:
-            self.bin_checkbox.setChecked(False)
+        self.bin_checkbox.setVisible(show_bin)
+        self.bin_checkbox.setChecked(show_bin)  # zaznaczony tylko jeśli widoczny
 
     def category_combo_changed(self):
         """
@@ -1023,9 +1030,13 @@ class MainWindow(QWidget):
 
         if self.data is not None:
             self.log_area.append('Data has been processed.')
+
             self.update_filter_column_options()
             self.update_grouping_column_options()
             # Pokaż przyciski po załadowaniu danych
+            self.gender_checkbox.setVisible(False)
+            self.bin_checkbox.setVisible(False)
+
             self.group_execute_btn.setVisible(True)
             self.generate_report_btn.setVisible(True)
             self.clear_filters_btn.setVisible(True)
