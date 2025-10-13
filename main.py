@@ -1,19 +1,31 @@
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog,
     QVBoxLayout, QHBoxLayout, QTextEdit, QGroupBox, QComboBox,
-    QRadioButton, QButtonGroup, QGridLayout, QDoubleSpinBox, QCheckBox)
+    QRadioButton, QButtonGroup, QGridLayout, QDoubleSpinBox, QCheckBox, QInputDialog)
+
+from sqlalchemy import create_engine, inspect
+
 import sys
 import pandas as pd
 from pandas.api.types import CategoricalDtype
 import numpy as np
 import seaborn as sns
-from matplotlib import pyplot as plt
+import math
+import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Table, TableStyle
+from reportlab.lib import colors
+import tempfile
+import os
 
 
 # Wczytanie danych z pliku CSV.
 def load_data(path):
+
     try:
         data = pd.read_csv(path, delimiter=',')
         return data
@@ -26,6 +38,8 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.data = None
+        self.canvas = None
+        self.current_figure = None
         self.current_plot_data = None
         self.setWindowTitle('Data analysis')
         self.setGeometry(100, 100, 1200, 800)
@@ -60,9 +74,13 @@ class MainWindow(QWidget):
         self.bottom_layout.addWidget(self.log_area)
         self.bottom_box.setLayout(self.bottom_layout)
 
-        # Przycisk wyboru pliku
-        self.button = QPushButton('📂 Select CSV File')
-        self.button.clicked.connect(self.select_file)
+        # Przycisk wyboru pliku CSV
+        self.csv_button = QPushButton('📂 Select CSV File')
+        self.csv_button.clicked.connect(self.select_file)
+
+        # Przycisk wyboru bazy danych SQLite
+        self.db_button = QPushButton('Select SQLite Database')
+        self.db_button.clicked.connect(self.load_data_from_sqlite)
 
         # LEWA CZĘŚĆ: FILTRY I GRUPOWANIE ===
 
@@ -222,7 +240,8 @@ class MainWindow(QWidget):
         self.left_layout.addWidget(self.clear_filters_btn)
 
         # Layout końcowy
-        self.main_layout.addWidget(self.button)
+        self.main_layout.addWidget(self.csv_button)
+        self.main_layout.addWidget(self.db_button)
         self.main_layout.addLayout(self.center_layout, 2)
         self.main_layout.addWidget(self.bottom_box, 1)
 
@@ -268,9 +287,12 @@ class MainWindow(QWidget):
         Usuwa wszystkie wykresy z prawego panelu (right_layout).
         """
         for i in reversed(range(self.right_layout.count())):
-            widget_to_remove = self.right_layout.itemAt(i).widget()
-            if widget_to_remove is not None:
-                widget_to_remove.setParent(None)
+            item = self.right_layout.itemAt(i)
+            widget = item.widget()
+            if widget is not None:
+                self.right_layout.removeWidget(widget)
+                widget.setParent(None)
+                widget.deleteLater()
 
     # Funkcje dotyczące grupowania i filtrowania danych
     def get_filtered_data(self):
@@ -364,9 +386,6 @@ class MainWindow(QWidget):
             return df, binned_col_name
         return df, group_col
 
-    import numpy as np
-    from pandas.api.types import CategoricalDtype
-
     def bin_numeric_column(self, series, column_name=None):
         """
         Dzieli kolumnę numeryczną na przedziały z poprawnym uwzględnieniem wartości granicznych.
@@ -375,8 +394,8 @@ class MainWindow(QWidget):
             # Definicje przedziałów i etykiet dla poszczególnych kolumn
             bin_configs = {
                 'BMI': {
-                    'bins': [0, 18.5, 24.9, 29.9, 34.9, 39.9, np.inf],
-                    'labels': ['<18.5', '18.5-24.9', '25.0-29.9', '30.0-34.9', '35.0-39.9', '40.0+']
+                    'bins': [18.5, 24.9, 29.9, 34.9, 39.9, np.inf],
+                    'labels': ['18.5-24.9', '25.0-29.9', '30.0-34.9', '35.0-39.9', '40.0+']
                 },
                 'AGE': {
                     'bins': [20, 30, 40, 50, 60, 70, np.inf],
@@ -614,6 +633,8 @@ class MainWindow(QWidget):
 
     def bar_chart(self, ax, data, x_col, y_col, hue_col):
         palette = {'F': '#fe46a5', 'M': '#82cafc'}
+        data = data.copy()
+        data[x_col] = data[x_col].astype(str)
         if hue_col:
             sns.barplot(data=data, x=x_col, y=y_col, hue=hue_col, palette=palette, ax=ax)
         else:
@@ -698,8 +719,12 @@ class MainWindow(QWidget):
         """
         Wyświetla wykres na panelu po prawej stronie.
         """
-        canvas = FigureCanvas(fig)
-        self.right_layout.addWidget(canvas)
+        self.clear_right_panel()  # usuwa wszystkie poprzednie widgety z layoutu
+
+        self.canvas = FigureCanvas(fig)
+        self.right_layout.addWidget(self.canvas)
+
+        self.current_figure = fig  # zapisz aktualny wykres
 
     def statistics(self, data, column):
         """
@@ -731,6 +756,11 @@ class MainWindow(QWidget):
 
     # Dostosowywanie widoczności opcji interfejsu w zależności od typu wykresu i danych
     def chart_type_changed(self):
+        """
+        Aktualizuje interfejs użytkownika w zależności od wybranego typu wykresu.
+        Ukrywa lub pokazuje odpowiednie elementy GUI (np. grupowanie, agregacja),
+        dostosowuje dostępne funkcje agregujące i aktualizuje listę kolumn do filtrowania.
+        """
         selected_chart = self.chart_type_combo.currentText()
         disable_grouping = selected_chart in ['Histogram', 'Heatmap']
         disable_agg = selected_chart in ['Pie chart']
@@ -748,7 +778,7 @@ class MainWindow(QWidget):
         self.agg_func_group.setExclusive(False)
         for name, btn in self.agg_func_buttons.items():
             if selected_chart == "Pie Chart":
-                # Dla PieChart tylko Count jest widoczny i zaznaczony
+                # Dla Pie Chart tylko jedna możliwość
                 if name.lower() == "count":
                     btn.setVisible(True)
                     btn.setChecked(True)
@@ -773,6 +803,11 @@ class MainWindow(QWidget):
         self.update_checkboxes_visibility()
 
     def agg_func_changed(self):
+        """
+        Reaguje na zmianę wybranej funkcji agregującej.
+        Ukrywa pole wyboru kolumny agregacji, jeśli nie wybrano żadnej funkcji
+        lub wybrano funkcję 'count' (która nie wymaga kolumny).
+        """
         selected_func = None
         for func_key, btn in self.agg_func_buttons.items():
             if btn.isChecked():
@@ -786,28 +821,34 @@ class MainWindow(QWidget):
             self.agg_column_combo.setVisible(True)
 
     def update_filter_column_options(self):
+        """
+        Aktualizuje dostępne kolumny w comboboxie filtrowania w zależności od typu wykresu.
+        """
         if self.data is None:
             return
 
         selected_chart = self.chart_type_combo.currentText()
 
-        # Zapamiętaj aktualnie wybraną kolumnę filtra (userData)
+        # Zapamiętaj aktualnie wybraną kolumnę filtra
         current_filter_col = self.filter_column_combo.currentData()
 
         self.filter_column_combo.clear()
         self.filter_column_combo.addItem('Not selected', userData=None)
 
-        if selected_chart == "Histogram":
+        if selected_chart == 'Histogram':
             # Dodaj tylko kolumny numeryczne
-            numeric_columns = [col for col in self.data.columns if pd.api.types.is_numeric_dtype(self.data[col])]
-            for col in numeric_columns:
-                label = self.column_labels.get(col, col)
-                self.filter_column_combo.addItem(label, userData=col)
+            columns_to_show = [
+                col for col in self.data.columns
+                if pd.api.types.is_numeric_dtype(self.data[col])
+            ]
         else:
             # Dodaj wszystkie kolumny
-            for col in self.data.columns:
-                label = self.column_labels.get(col, col)
-                self.filter_column_combo.addItem(label, userData=col)
+            columns_to_show = self.data.columns
+
+        # Dodaj kolumny do comboboxa z uwzględnieniem etykiet
+        for col in columns_to_show:
+            label = self.column_labels.get(col, col)
+            self.filter_column_combo.addItem(label, userData=col)
 
         # Przywróć wybrany filtr, jeśli jest dostępny
         index = self.filter_column_combo.findData(current_filter_col)
@@ -820,7 +861,9 @@ class MainWindow(QWidget):
 
     def update_grouping_column_options(self):
         """
-        Aktualizuje kolumny dostępne do grupowania i agregacji po wczytaniu pliku.
+        Aktualizuje listy kolumn dostępnych do grupowania i agregacji po wczytaniu danych.
+        Do grupowania: wszystkie kolumny zdefiniowane w słowniku etykiet.
+        Do agregacji: tylko kolumny numeryczne zdefiniowane w słowniku etykiet.
         """
         if self.data is None:
             return
@@ -850,7 +893,11 @@ class MainWindow(QWidget):
             self.agg_column_combo.addItem(label, userData=col)
 
     def update_filter_values(self):
-        """Aktualizuje opcje filtrowania"""
+        """
+        Aktualizuje widżety filtrowania na podstawie wybranej kolumny.
+        Dla kolumn numerycznych (int, float) pokazuje spinboxy z zakresem.
+        Dla kolumn kategorycznych pokazuje combobox z unikalnymi wartościami.
+        """
         filter_col = self.filter_column_combo.currentData()
 
         if not filter_col or self.data is None:
@@ -917,22 +964,23 @@ class MainWindow(QWidget):
 
     def update_numeric_columns(self):
         """
-        Aktualizuje opcje kolumny agregacji po wybraniu kolumny grupowania.
-        Ukrywa lub blokuje niepasujące funkcje agregujące.
+        Aktualizuje dostępne opcje kolumny agregacji po wybraniu kolumny grupowania.
+        Agregować można tylko kolumny numeryczne zdefiniowane w słowniku etykiet.
+        Kolumna grupowania nie może być jednocześnie kolumną agregującą.
+        Włącza lub wyłącza przyciski funkcji agregujących w zależności od typu kolumny grupującej.
+        Synchronizuje widoczność pola agregacji z wybraną funkcją agregującą.
         """
         selected_group_col = self.group_column_combo.currentData()
         if not selected_group_col or self.data is None:
             return
 
-        # Kolumny z etykietą
-        labeled_cols = [col for col in self.data.columns if col in self.column_labels]
-
         # Kolumny numeryczne z etykietą (dla agregacji)
+        labeled_cols = [col for col in self.data.columns if col in self.column_labels]
         numeric_cols = self.data.select_dtypes(include='number').columns
-        numeric_labeled_cols = [col for col in numeric_cols if col in labeled_cols]
-
         # Usuń kolumnę grupującą z kolumn do agregacji
-        numeric_labeled_cols = [col for col in numeric_labeled_cols if col != selected_group_col]
+        numeric_labeled_cols = [
+            col for col in numeric_cols if col in labeled_cols and col != selected_group_col
+        ]
 
         self.agg_column_combo.clear()
         self.agg_column_combo.addItem('Not selected', userData=None)
@@ -967,11 +1015,11 @@ class MainWindow(QWidget):
 
     def update_checkboxes_visibility(self):
         """
-        Ustawia widoczność checkboxów w zależności od:
-        - wybranego wykresu,
-        - danych,
-        - typu kolumny grupującej (dla bin),
-        - wybranych filtrów.
+        Ustawia widoczność i domyślne stany checkboxów w zależności od:
+        - typu wykresu,
+        - zawartości danych,
+        - typu kolumny grupującej,
+        - wybranej kolumny filtrowania.
         """
 
         selected_chart = self.chart_type_combo.currentText()
@@ -1017,7 +1065,7 @@ class MainWindow(QWidget):
     # Wczytanie pliku CSV
     def select_file(self):
         """
-        Wybór pliku
+        Wybór pliku CSV
         """
         path, _ = QFileDialog.getOpenFileName(self, 'Choose CSV file', '', 'CSV files (*.csv)')
         if not path:
@@ -1047,10 +1095,65 @@ class MainWindow(QWidget):
             self.generate_report_btn.setVisible(False)
             self.clear_filters_btn.setVisible(False)
 
+    def load_data_from_sqlite(self):
+        """
+        Loads data from a user-selected SQLite database and table.
+        """
+
+        # Open file dialog to choose .db file
+        db_path, _ = QFileDialog.getOpenFileName(self, "Select SQLite database", "", "SQLite Database (*.db)")
+        if not db_path:
+            self.log_area.append("No database selected.")
+            return
+
+        if not os.path.exists(db_path):
+            self.log_area.append(f"Database file not found: {db_path}")
+            return
+
+        try:
+            # Connect to SQLite database using SQLAlchemy
+            engine = create_engine(f"sqlite:///{db_path}")
+            inspector = inspect(engine)
+
+            # Get list of tables
+            tables = inspector.get_table_names()
+            if not tables:
+                self.log_area.append("No tables found in the database.")
+                return
+
+            # Let user choose a table
+            table_name, ok = QInputDialog.getItem(self, "Select Table", "Choose table to load:", tables, editable=False)
+            if not ok or not table_name:
+                self.log_area.append("Table selection cancelled.")
+                return
+
+            # Load the selected table into a DataFrame
+            df = pd.read_sql_table(table_name, engine)
+            self.data = df
+
+            self.label.setText(f"Loaded table: {table_name}")
+            self.log_area.append(f"Data loaded from table '{table_name}' in '{os.path.basename(db_path)}'.")
+
+            self.update_filter_column_options()
+            self.update_grouping_column_options()
+
+            self.gender_checkbox.setVisible(False)
+            self.bin_checkbox.setVisible(False)
+            self.group_execute_btn.setVisible(True)
+            self.generate_report_btn.setVisible(True)
+            self.clear_filters_btn.setVisible(True)
+
+        except Exception as e:
+            self.log_area.append(f"Error while loading data from database: {str(e)}")
+            self.group_execute_btn.setVisible(False)
+            self.generate_report_btn.setVisible(False)
+            self.clear_filters_btn.setVisible(False)
+
     # Eksport wyników do pliku CSV.
     def generate_report(self):
         """
-        Generuje raport CSV z danych użytych do wykresu (z filtrowaniem, grupowaniem, binowaniem, płcią).
+        Generuje raport CSV z danych użytych do wykresu.
+        Dodaje możliwość zapisania raportu wraz z wykresem do PDF.
         """
         if self.chart_type_combo.currentText() in ['Heatmap', 'Histogram']:
             df = self.get_filtered_data()
@@ -1061,16 +1164,99 @@ class MainWindow(QWidget):
             self.log_area.append('No data to export.')
             return
 
-        path, _ = QFileDialog.getSaveFileName(
-            self, 'Save CSV Report', '', 'CSV Files (*.csv);;All Files (*)'
+        path, filetype = QFileDialog.getSaveFileName(
+            self, 'Save Report', '', 'CSV Files (*.csv);;PDF Files (*.pdf);;All Files (*)'
         )
 
-        if path:
-            try:
+        if not path:
+            return
+
+        try:
+            if filetype == 'CSV Files (*.csv)' or path.endswith('.csv'):
                 df.to_csv(path, index=False)
-                self.log_area.append(f'Report successfully saved:\n{path}')
-            except Exception as e:
-                self.log_area.append(f'Failed to save the report:\n{str(e)}')
+                self.log_area.append(f'Report successfully saved as CSV:\n{path}')
+
+            elif filetype == 'PDF Files (*.pdf)' or path.endswith('.pdf'):
+                # Jeśli nie masz jeszcze funkcji generate_pdf_report, możesz ją napisać i wywołać tutaj
+                self.generate_pdf_report(df, path)
+
+            else:
+                self.log_area.append('Unsupported file format selected.')
+
+        except Exception as e:
+            self.log_area.append(f'Failed to save the report:\n{str(e)}')
+
+    def generate_pdf_report(self, df, path):
+        try:
+            if not (hasattr(self, 'current_figure') and self.current_figure):
+                self.log_area.append('No chart available to include in the report.')
+                return
+
+            # Zapisz wykres do pliku tymczasowego (tylko raz)
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
+                self.current_figure.savefig(tmpfile.name, bbox_inches='tight')
+                chart_path = tmpfile.name
+
+            c = canvas.Canvas(path, pagesize=A4)
+            width, height = A4
+
+            # Tytuł raportu
+            c.setFont('Helvetica-Bold', 16)
+            c.drawString(50, height - 50, 'Raport')
+
+            # Oblicz rozmiar wykresu i narysuj
+            fig_width, fig_height = self.current_figure.get_size_inches()
+            fig_dpi = self.current_figure.get_dpi()
+            img_width_px = fig_width * fig_dpi
+            img_height_px = fig_height * fig_dpi
+            aspect_ratio = img_height_px / img_width_px
+
+            chart_width = width - 100
+            chart_height = chart_width * aspect_ratio
+
+            c.drawImage(chart_path, 50, height - 100 - chart_height, width=chart_width, height=chart_height)
+
+            # Przygotuj dane do tabeli
+            rows_per_page = 30
+            data = [df.columns.tolist()] + df.values.tolist()
+            total_pages = math.ceil(len(data[1:]) / rows_per_page)
+
+            for page in range(total_pages):
+                start = page * rows_per_page + 1
+                end = start + rows_per_page
+                page_data = [data[0]] + data[start:end]
+
+                table = Table(page_data, repeatRows=1)
+
+                # Styl tabeli: nagłówek w szarościach, reszta biała
+                table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),  # nagłówek jasnoszary
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),  # reszta na białym
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ]))
+
+                if page == 0:
+                    table_width, table_height = table.wrapOn(c, width - 100, height)
+                    table.drawOn(c, 50, height - 120 - chart_height - table_height)
+                else:
+                    c.showPage()
+                    c.setFont('Helvetica', 10)
+                    c.drawString(50, height - 40, f'Page{page + 1}')
+                    table_width, table_height = table.wrapOn(c, width - 100, height)
+                    table.drawOn(c, 50, height - 80 - table_height)
+
+            c.save()
+            os.remove(chart_path)
+
+            self.log_area.append(f'PDF report saved successfully:\n{path}')
+
+        except Exception as e:
+            self.log_area.append(f'Failed to generate PDF report:\n{str(e)}')
 
 
 def main():
