@@ -136,7 +136,7 @@ class MainWindow(QWidget):
         self.filter_min_spinbox = QDoubleSpinBox()
         self.filter_max_spinbox = QDoubleSpinBox()
 
-        # Domyślny zakres na start, zostanie potem zmieniony dynamicznie
+        # Domyślny zakres na start
         self.filter_min_spinbox.setRange(0, 1000)
         self.filter_max_spinbox.setRange(0, 1000)
 
