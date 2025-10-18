@@ -17,9 +17,12 @@ from matplotlib.figure import Figure
 
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+
 from reportlab.platypus import Table, TableStyle
 from reportlab.lib import colors
 import tempfile
+
+from datetime import datetime
 import os
 
 
@@ -45,6 +48,10 @@ class MainWindow(QWidget):
 
     def __init__(self):
         super().__init__()
+        self.data_source = None
+        self.grouping_columns = None
+        self.applied_filters = None
+        self.aggregation_functions = None
         self.data = None
         self.canvas = None
         self.current_figure = None
@@ -219,7 +226,7 @@ class MainWindow(QWidget):
         self.gender_checkbox.setChecked(False)
 
         self.bin_checkbox = QCheckBox('Show data in ranges')
-        self.bin_checkbox.setChecked(True)
+        self.bin_checkbox.setChecked(False)
 
         self.trendline_checkbox = QCheckBox("Show trend line")
         self.trendline_checkbox.setChecked(False)
@@ -345,21 +352,26 @@ class MainWindow(QWidget):
             return self.data.copy()
 
         col_data = self.data[filter_col]
+        filter_description = ""  # do raportu pdf
         # Filtrowanie w kolumnach z wartościami numerycznymi
         if pd.api.types.is_numeric_dtype(col_data):
             min_val = self.filter_min_spinbox.value()
             max_val = self.filter_max_spinbox.value()
             filtered_df = self.data[(col_data >= min_val) & (col_data <= max_val)].copy()
+            filter_description = f"{filter_col}: {min_val} - {max_val}"
         # Filtrowanie w kolumnach z wartościami nienumerycznymi
         elif self.category_filter_combo.isVisible():
             selected_val = self.category_filter_combo.currentData()
             if selected_val is not None:
                 filtered_df = self.data[self.data[filter_col].astype(str) == str(selected_val)].copy()
+                filter_description = f"{filter_col} = '{selected_val}'"
             else:
                 filtered_df = self.data.copy()
+                filter_description = f"{filter_col} - no value selected"
         else:
             filtered_df = self.data.copy()
-
+            filter_description = "-"
+        self.applied_filters = filter_description
         return filtered_df
 
     def get_selected_agg_func(self):
@@ -412,6 +424,16 @@ class MainWindow(QWidget):
 
         grouped_df, y_col = self.aggregate_grouped_data(df, group_cols, agg_col, agg_func)
 
+        # do raportu pdf
+        self.grouping_columns = ", ".join(group_cols)
+        if agg_func == 'count':
+            self.aggregation_functions = "count (number of patients)"
+        else:
+            self.aggregation_functions = f"{agg_func} of '{agg_col}'"
+
+        # Zaokrąglenie tylko kolumn numerycznych
+        for col in grouped_df.select_dtypes(include='number').columns:
+            grouped_df[col] = grouped_df[col].round(2)
         return grouped_df
 
     def bin_column_if_needed(self, df, group_col):
@@ -419,7 +441,7 @@ class MainWindow(QWidget):
         Dodaje zbinowaną wersję kolumny grupującej, jeśli opcja binowania jest włączona.
         """
         if self.bin_checkbox.isChecked() and pd.api.types.is_numeric_dtype(df[group_col]):
-            binned_col_name = f'binned_{group_col}'
+            binned_col_name = f'{group_col} in ranges'
             df[binned_col_name] = self.bin_numeric_column(df[group_col], column_name=group_col)
             return df, binned_col_name
         return df, group_col
@@ -519,24 +541,32 @@ class MainWindow(QWidget):
         Przygotowuje etykiety i tytuł wykresu na podstawie wybranych kolumn i trybu agregacji.
         Zwraca słownik z tytułem wykresu i opisami osi.
         """
-        x_unit = self.column_units.get(x_col, '')
-        y_unit = self.column_units.get(y_col, '') if agg_func != 'count' and y_col else ''
+        # Wyodrębnienie podstawowych nazw kolumn (dla kolumn zbinowanych)
+        x_base = x_col.split(' (')[0]
+        y_base = y_col.split(' (')[0] if y_col else ''
+
+        # Jednostki
+        x_unit = self.column_units.get(x_base, '')
+        y_unit = self.column_units.get(y_base, '') if agg_func != 'count' and y_col else ''
+
+        # Etykiety — nazwy kolumn ze słownika
         x_label = self.column_labels.get(x_col, x_col)
         y_label = self.column_labels.get(y_col, y_col) if y_col else ''
 
+        # Tytuł wykresu
         if is_raw_mode:
-            title = f'Raw Data: Plot of {y_label} vs {x_label}'
+            title = f'{y_label} by {x_label} (raw data)'
         elif agg_func == 'count':
             title = f'{self.agg_func_buttons[agg_func].text()} by {x_label}'
         elif agg_func:
-            title = f'{self.agg_func_buttons[agg_func].text()} values of {y_label} by {x_label}'
+            title = f'{self.agg_func_buttons[agg_func].text()} of {y_label} by {x_label}'
         else:
-            title = f'Plot of {y_label} vs {x_label}'
+            title = f'{y_label} by {x_label}'
 
         return {
             'x_label': f'{x_label} ({x_unit})' if x_unit else x_label,
             'y_label': f'{y_label} ({y_unit})' if y_unit else y_label,
-            'title': title
+            'title': title.capitalize()
         }
 
     def handle_other_charts(self, raw_mode=False):
@@ -585,7 +615,7 @@ class MainWindow(QWidget):
                 self.log_area.append('No aggregation function selected.')
                 return
 
-            x_col = f'binned_{group_col}' if self.bin_checkbox.isChecked() else group_col
+            x_col = f'{group_col} in ranges' if self.bin_checkbox.isChecked() else group_col
             y_col = grouped.columns[-1]
 
             params = self.prepare_plot_params(x_col, y_col, agg_func, is_raw_mode=False)
@@ -620,6 +650,7 @@ class MainWindow(QWidget):
         fig = Figure(figsize=(10, 6))
         ax = fig.add_subplot(111)
         col_name = self.column_labels.get(column, column)
+        col_unit = self.column_units.get(column, '')
 
         try:
             # Oblicz statystyki
@@ -642,8 +673,8 @@ class MainWindow(QWidget):
                        label=f"Median: {stats['median']:.2f}")
 
             # Dodaj tytuł, etykiety i legendę
-            ax.set_title(f'Histogram of {col_name}')
-            ax.set_xlabel(col_name)
+            ax.set_title(f'Histogram of {col_name.lower()}')
+            ax.set_xlabel(f'{col_name.capitalize()} ({col_unit})' if col_unit else f'{col_name.capitalize()}')
             ax.set_ylabel('Frequency')
             ax.legend()
             ax.grid(True)
@@ -714,7 +745,7 @@ class MainWindow(QWidget):
             if not plot:
                 return
 
-            full_title = title + (' (gender differences)' if hue_col else '')
+            full_title = ('Gender differences: ' if hue_col else '') + title
             ax.set_title(full_title, pad=20)
 
             self.render_figure(fig)
@@ -804,7 +835,7 @@ class MainWindow(QWidget):
             original_col = x_col.replace('binned_', '') if x_col.startswith('binned_') else x_col
             column_label = self.column_labels.get(original_col, original_col)
             unit = self.column_units.get(original_col, '')
-            legend_title = f'Legend – {column_label} ({unit})' if unit else f'Legend – {column_label}'
+            legend_title = f'Legend – {column_label}'
 
             # Tworzenie legendy
             ax.legend(
@@ -1040,17 +1071,27 @@ class MainWindow(QWidget):
 
     def update_checkboxes_visibility(self):
         """
-        Aktualizuje widoczność, dostępność i tooltipy checkboxów w na podstawie aktualnego stanu danych,
-        wybranego wykresu, kolumn oraz zaznaczonych opcji.
+        Aktualizuje widoczność, dostępność i tooltipy checkboxów
+        na podstawie aktualnego stanu danych, wybranego wykresu,
+        kolumn oraz zaznaczonych opcji.
         """
         is_raw = self.raw_data_checkbox.isChecked()
         selected_chart = self.chart_type_combo.currentText()
         selected_group_col = self.group_column_combo.currentData()
-
-        bin_checked = self.bin_checkbox.isChecked()
         trendline_checked = self.trendline_checkbox.isChecked()
 
-        # Czy gender checkbox może być aktywny?
+        # W trybie raw - gender i bin są zawsze wyłączone i odznaczone
+        if is_raw:
+            self.gender_checkbox.setChecked(False)
+            self.gender_checkbox.setEnabled(False)
+            self.gender_checkbox.setToolTip("Not available in raw data mode.")
+
+            self.bin_checkbox.setChecked(False)
+            self.bin_checkbox.setEnabled(False)
+            self.bin_checkbox.setToolTip("Not available in raw data mode.")
+            return
+
+        # Gender checkbox
         gender_available = self.gender_checkbox_available(selected_chart, selected_group_col, is_raw)
         self.gender_checkbox.setEnabled(gender_available)
         if not gender_available:
@@ -1061,36 +1102,47 @@ class MainWindow(QWidget):
         else:
             self.gender_checkbox.setToolTip("Include gender-based comparison in the chart.")
 
-        # Czy binning jest dozwolony?
-        bin_available = self.binning_available(selected_chart, selected_group_col, is_raw, trendline_checked)
-        # Czy trendline jest dozwolony?
-        trendline_available = (selected_chart == 'Scatter Plot') and (not bin_checked)
+        # Specjalne ustawienia dla Pie Chart
+        if selected_chart == 'Pie Chart':
+            if selected_group_col and pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
+                self.bin_checkbox.setEnabled(True)
+                self.bin_checkbox.setChecked(True)
+                self.bin_checkbox.setToolTip("Binning enabled for numeric group column in Pie Chart.")
+            else:
+                self.bin_checkbox.setChecked(False)
+                self.bin_checkbox.setEnabled(False)
+                self.bin_checkbox.setToolTip("Binning disabled for non-numeric group column in Pie Chart.")
 
-        # Synchronizacja wzajemnych zależności checkboxów
-        if trendline_checked and not bin_available:
-            self.bin_checkbox.setChecked(False)
-            bin_checked = False
-
-        if bin_checked and not trendline_available:
             self.trendline_checkbox.setChecked(False)
-            trendline_checked = False
+            self.trendline_checkbox.setEnabled(False)
+            self.trendline_checkbox.setToolTip("Trendline not available for Pie Chart.")
 
-        # Ustawienia checkboxów i tooltipów
-        self.bin_checkbox.setEnabled(bin_available)
-        self.trendline_checkbox.setEnabled(trendline_available)
+        else:
+            # Standardowa logika binowania i trendline
+            bin_available = self.binning_available(selected_chart, selected_group_col, is_raw, trendline_checked)
+            trendline_available = (selected_chart == 'Scatter Plot') and (not self.bin_checkbox.isChecked())
 
-        self.bin_checkbox.setToolTip(
-            "Enable binning for numeric data."
-            if bin_available
-            else "Binning is only available for numeric group columns, "
-                 "compatible charts, not in raw mode, and not when trendline is active."
-        )
+            if trendline_checked and not bin_available:
+                self.bin_checkbox.setChecked(False)
 
-        self.trendline_checkbox.setToolTip(
-            "Show regression trend line on scatter plot."
-            if trendline_available
-            else "Trendline is only available for Scatter Plot and when binning is not selected."
-        )
+            if self.bin_checkbox.isChecked() and not trendline_available:
+                self.trendline_checkbox.setChecked(False)
+
+            self.bin_checkbox.setEnabled(bin_available)
+            self.trendline_checkbox.setEnabled(trendline_available)
+
+            self.bin_checkbox.setToolTip(
+                "Enable binning for numeric data."
+                if bin_available
+                else "Binning is only available for numeric group columns, "
+                     "compatible charts, not in raw mode, and not when trendline is active."
+            )
+
+            self.trendline_checkbox.setToolTip(
+                "Show regression trend line on scatter plot."
+                if trendline_available
+                else "Trendline is only available for Scatter Plot and when binning is not selected."
+            )
 
     def gender_checkbox_available(self, selected_chart, selected_group_col, is_raw):
         """
@@ -1133,27 +1185,134 @@ class MainWindow(QWidget):
         (comboboxy, checkboxy, radiobuttony) w zależności od trybu pracy (raw/aggregated),
         wybranego typu wykresu oraz funkcji agregującej.
         """
-
         is_raw = self.raw_data_checkbox.isChecked()
+        selected_chart = self.chart_type_combo.currentText()
         agg_func = self.get_selected_agg_func()
 
-        if is_raw:
-            # Wymuszenie scatter plot i blokada
-            index = self.chart_type_combo.findText('Scatter Plot')
-            if index != -1:
-                self.chart_type_combo.setCurrentIndex(index)
-            self.chart_type_combo.setEnabled(False)
-            self.chart_type_combo.setToolTip('Only Scatter Plot is available in raw data mode.')
-        else:
-            # Odblokowanie wyboru wykresu
-            self.chart_type_combo.setEnabled(True)
-            self.chart_type_combo.setToolTip('Select chart type.')
+        # Domyślne ustawienia checkboxów - wyłączone i odznaczone
+        self.gender_checkbox.setChecked(False)
+        self.gender_checkbox.setEnabled(False)
+        self.bin_checkbox.setChecked(False)
+        self.bin_checkbox.setEnabled(False)
+        self.trendline_checkbox.setChecked(False)
+        self.trendline_checkbox.setEnabled(False)
+        self.trendline_checkbox.setToolTip("")
 
-        # Filtr - zawsze widoczny i aktywny
+        # Filtr zawsze widoczny i aktywny
         self.filter_column_combo.setVisible(True)
         self.filter_column_combo.setEnabled(True)
 
-        # Grupowanie i agregacja
+        # Grupowanie domyślnie widoczne i aktywne
+        self.grouping_section_label.setVisible(True)
+        self.group_column_combo.setVisible(True)
+        self.group_column_combo.setEnabled(True)
+
+        # Kolumna agregacji domyślnie widoczna i aktywna
+        self.agg_column_combo.setVisible(True)
+        self.agg_column_combo.setEnabled(True)
+
+        # Domyślne ustawienia przycisków agregacji - włączone i odznaczone
+        for btn in self.agg_func_buttons.values():
+            btn.setEnabled(True)
+            btn.setChecked(False)
+
+        self.chart_type_combo.setEnabled(True)
+        self.chart_type_combo.setToolTip('Select chart type.')
+
+        if selected_chart == 'Pie Chart':
+            # Dla Pie Chart tylko 'count' jest aktywne i zaznaczone
+            for key, btn in self.agg_func_buttons.items():
+                if key == 'count':
+                    btn.setEnabled(True)
+                    btn.setChecked(True)
+                else:
+                    btn.setEnabled(False)
+                    btn.setChecked(False)
+
+            self.agg_column_combo.setEnabled(False)
+
+            selected_group_col = self.group_column_combo.currentData()
+            if selected_group_col and pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
+                self.bin_checkbox.setEnabled(True)
+                self.bin_checkbox.setChecked(True)
+                self.bin_checkbox.setToolTip("Binning enabled for numeric group column in Pie Chart.")
+            else:
+                self.bin_checkbox.setEnabled(False)
+                self.bin_checkbox.setChecked(False)
+                self.bin_checkbox.setToolTip("Binning disabled for non-numeric group column in Pie Chart.")
+
+            self.trendline_checkbox.setEnabled(False)
+            self.trendline_checkbox.setChecked(False)
+            self.trendline_checkbox.setToolTip("Trendline not available for Pie Chart.")
+
+            # Grupowanie aktywne
+            self.group_column_combo.setEnabled(True)
+            self.grouping_section_label.setVisible(True)
+
+            self.raw_data_checkbox.setChecked(False)
+            self.raw_data_checkbox.setEnabled(False)
+
+            return
+
+        if selected_chart in ['Histogram', 'Heatmap']:
+            # Filtr aktywny
+            self.filter_column_combo.setEnabled(True)
+
+            # Grupowanie zablokowane
+            self.group_column_combo.setEnabled(False)
+
+            # Kolumna agregacji niewidoczna i nieaktywna
+            self.agg_column_combo.setVisible(False)
+            self.agg_column_combo.setEnabled(False)
+
+            # Przycisków agregacji wyłączone i odznaczone
+            for btn in self.agg_func_buttons.values():
+                btn.setEnabled(False)
+                btn.setChecked(False)
+
+            # Checkboxy wyłączone i odznaczone (już ustawione)
+
+            self.raw_data_checkbox.setChecked(False)
+            self.raw_data_checkbox.setEnabled(False)
+
+            return
+
+        # Jeśli tryb raw
+        if is_raw:
+            # Wymusz Scatter Plot i zablokuj wybór wykresu
+            if selected_chart != 'Scatter Plot':
+                self.chart_type_combo.setCurrentText('Scatter Plot')
+            self.chart_type_combo.setEnabled(False)
+            self.chart_type_combo.setToolTip('Only Scatter Plot is available in raw data mode.')
+
+            # Grupowanie widoczne i aktywne
+            self.grouping_section_label.setVisible(True)
+            self.group_column_combo.setVisible(True)
+            self.group_column_combo.setEnabled(True)
+
+            # Kolumna agregacji widoczna i aktywna
+            self.agg_column_combo.setVisible(True)
+            self.agg_column_combo.setEnabled(True)
+
+            # Funkcje agregujące wyłączone i odznaczone
+            for btn in self.agg_func_buttons.values():
+                btn.setEnabled(False)
+                btn.setChecked(False)
+
+            # Trendline dostępny i aktywny
+            self.trendline_checkbox.setEnabled(True)
+            self.trendline_checkbox.setChecked(False)
+            self.trendline_checkbox.setToolTip("Show regression trend line on scatter plot.")
+
+            return
+
+        # Pozostałe przypadki
+        self.chart_type_combo.setEnabled(True)
+        self.chart_type_combo.setToolTip('Select chart type.')
+
+        self.filter_column_combo.setVisible(True)
+        self.filter_column_combo.setEnabled(True)
+
         self.grouping_section_label.setVisible(True)
         self.group_column_combo.setVisible(True)
         self.group_column_combo.setEnabled(True)
@@ -1168,13 +1327,11 @@ class MainWindow(QWidget):
         else:
             for btn in self.agg_func_buttons.values():
                 btn.setEnabled(True)
-
             if agg_func == 'count':
                 self.agg_column_combo.setEnabled(False)
             else:
                 self.agg_column_combo.setEnabled(True)
 
-        # Update checkboxy
         self.update_checkboxes_visibility()
 
     def category_combo_changed(self):
@@ -1219,6 +1376,7 @@ class MainWindow(QWidget):
 
         self.log_area.append(f'File loaded: {path}')
         self.data = load_data(path)
+        self.data_source = os.path.basename(path)
         self.data_load_update()
 
     def load_data_from_sqlite(self):
@@ -1248,6 +1406,7 @@ class MainWindow(QWidget):
             self.data = pd.read_sql_table(table_name, engine)
             self.label.setText(f"Loaded table: {table_name}")
             self.log_area.append(f"Data loaded from table '{table_name}' in '{os.path.basename(db_path)}'.")
+            self.data_source = f"{os.path.basename(db_path)} → {table_name}"
             self.data_load_update()
 
         except Exception as e:
@@ -1259,10 +1418,11 @@ class MainWindow(QWidget):
     # Eksport wyników do pliku CSV.
     def generate_report(self):
         """
-        Generuje raport CSV z danych użytych do wykresu.
-        Dodaje możliwość zapisania raportu wraz z wykresem do PDF.
+        Przygotowuje dane w zależności od trybu i wywołuje odpowiednią funkcję eksportu.
         """
-        if self.chart_type_combo.currentText() in ['Heatmap', 'Histogram']:
+        chart_type = self.chart_type_combo.currentText()
+
+        if self.raw_data_checkbox.isChecked() or chart_type in ['Heatmap', 'Histogram']:
             df = self.get_filtered_data()
         else:
             df = self.prepare_aggregated_data()
@@ -1280,18 +1440,33 @@ class MainWindow(QWidget):
 
         try:
             if filetype == 'CSV Files (*.csv)' or path.endswith('.csv'):
-                df.to_csv(path, index=False)
-                self.log_area.append(f'Report successfully saved as CSV:\n{path}')
-
+                self.generate_csv_report(df, path)
             elif filetype == 'PDF Files (*.pdf)' or path.endswith('.pdf'):
-                # Jeśli nie masz jeszcze funkcji generate_pdf_report, możesz ją napisać i wywołać tutaj
                 self.generate_pdf_report(df, path)
-
             else:
                 self.log_area.append('Unsupported file format selected.')
 
         except Exception as e:
             self.log_area.append(f'Failed to save the report:\n{str(e)}')
+
+    def generate_csv_report(self, df, path):
+        """
+        Eksportuje podany DataFrame do pliku CSV.
+        """
+        try:
+            df.to_csv(path, index=False)
+            self.log_area.append(f'Report successfully saved as CSV:\n{path}')
+        except Exception as e:
+            self.log_area.append(f'Failed to save CSV report:\n{str(e)}')
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.platypus import Table, TableStyle
+    from reportlab.lib import colors
+    import math
+    import os
+    from datetime import datetime
+    import tempfile
 
     def generate_pdf_report(self, df, path):
         try:
@@ -1299,7 +1474,7 @@ class MainWindow(QWidget):
                 self.log_area.append('No chart available to include in the report.')
                 return
 
-            # Zapisz wykres do pliku tymczasowego (tylko raz)
+            # Zapisz wykres do pliku tymczasowego
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
                 self.current_figure.savefig(tmpfile.name, bbox_inches='tight')
                 chart_path = tmpfile.name
@@ -1307,11 +1482,25 @@ class MainWindow(QWidget):
             c = canvas.Canvas(path, pagesize=A4)
             width, height = A4
 
-            # Tytuł raportu
+            # Strona 1 - wykres i informacje
             c.setFont('Helvetica-Bold', 16)
-            c.drawString(50, height - 50, 'Raport')
+            c.drawString(50, height - 50, 'Data Report')
 
-            # Oblicz rozmiar wykresu i narysuj
+            c.setFont('Helvetica', 10)
+            info_lines = [
+                f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Data source: {getattr(self, 'data_source', 'Unknown')}",
+                f"Applied filters: {getattr(self, 'applied_filters', 'None')}",
+                f"Grouping: {getattr(self, 'grouping_columns', 'None')}",
+                f"Aggregation: {getattr(self, 'aggregation_functions', 'None')}",
+                f"Data mode: {'Raw' if self.raw_data_checkbox.isChecked() else 'Aggregated'}"
+            ]
+            text_y = height - 80
+            for line in info_lines:
+                c.drawString(50, text_y, line)
+                text_y -= 14
+
+            # Rysowanie wykresu
             fig_width, fig_height = self.current_figure.get_size_inches()
             fig_dpi = self.current_figure.get_dpi()
             img_width_px = fig_width * fig_dpi
@@ -1321,41 +1510,45 @@ class MainWindow(QWidget):
             chart_width = width - 100
             chart_height = chart_width * aspect_ratio
 
-            c.drawImage(chart_path, 50, height - 100 - chart_height, width=chart_width, height=chart_height)
+            c.drawImage(chart_path, 50, text_y - chart_height - 10, width=chart_width, height=chart_height)
 
-            # Przygotuj dane do tabeli
+            # Numeracja strony na dole
+            c.setFont('Helvetica', 9)
+            c.drawRightString(width - 50, 30, "Page 1")
+            c.showPage()
+
+            # Strony z tabelą
             rows_per_page = 30
             data = [df.columns.tolist()] + df.values.tolist()
             total_pages = math.ceil(len(data[1:]) / rows_per_page)
 
             for page in range(total_pages):
+                c.setFont('Helvetica-Bold', 16)
+                c.drawString(50, height - 50, 'Data Report (cont.)')
+
+                c.setFont('Helvetica', 9)
+                c.drawRightString(width - 50, 30, f"Page {page + 2}")
+
                 start = page * rows_per_page + 1
                 end = start + rows_per_page
                 page_data = [data[0]] + data[start:end]
 
                 table = Table(page_data, repeatRows=1)
-
-                # Styl tabeli: nagłówek w szarościach, reszta biała
                 table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),  # nagłówek jasnoszary
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('FONTSIZE', (0, 0), (-1, -1), 8),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),  # reszta na białym
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
                     ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                 ]))
 
-                if page == 0:
-                    table_width, table_height = table.wrapOn(c, width - 100, height)
-                    table.drawOn(c, 50, height - 120 - chart_height - table_height)
-                else:
-                    c.showPage()
-                    c.setFont('Helvetica', 10)
-                    c.drawString(50, height - 40, f'Page{page + 1}')
-                    table_width, table_height = table.wrapOn(c, width - 100, height)
-                    table.drawOn(c, 50, height - 80 - table_height)
+                table_width, table_height = table.wrapOn(c, width - 100, height)
+                table.drawOn(c, 50, height - 80 - table_height)
+
+                c.showPage()
 
             c.save()
             os.remove(chart_path)
