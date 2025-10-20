@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QLabel, QPushButton, QFileDialog,
+    QApplication, QWidget, QLabel, QPushButton, QFileDialog, QScrollArea,
     QVBoxLayout, QHBoxLayout, QTextEdit, QGroupBox, QComboBox,
     QRadioButton, QButtonGroup, QGridLayout, QDoubleSpinBox, QCheckBox, QInputDialog)
 
@@ -29,7 +29,7 @@ import os
 # Wczytanie danych z pliku CSV.
 def load_data(path):
     """
-    Wczytuje dane z pliku CSV do DataFrame.
+    Wczytuje dane z pliku CSV do dataframe.
     """
     try:
         data = pd.read_csv(path, delimiter=',')
@@ -62,19 +62,23 @@ class MainWindow(QWidget):
         self.main_layout = QVBoxLayout()
         self.center_layout = QHBoxLayout()
 
-        # Lewa część: filtrowanie i grupowanie
-        self.left_box = QGroupBox('🔍 Filters and grouping')
+        # Lewa część okna
         self.left_layout = QVBoxLayout()
-
+        self.left_box = QWidget()
         self.left_box.setLayout(self.left_layout)
-        self.left_box.setMinimumWidth(300)
+
+        self.left_box.setMinimumWidth(200)
 
         # Prawa część: Wizualizacje
         self.right_box = QGroupBox('📊 Charts')
         self.right_layout = QVBoxLayout()
         self.right_box.setLayout(self.right_layout)
 
-        self.center_layout.addWidget(self.left_box, 1)
+        # QScrollArea dla lewej części
+        self.left_scroll_area = QScrollArea()
+        self.left_scroll_area.setWidgetResizable(True)
+        self.left_scroll_area.setWidget(self.left_box)  # lewy panel - widget przewijany
+        self.center_layout.addWidget(self.left_scroll_area, 1)
         self.center_layout.addWidget(self.right_box, 2)
 
         # Dolna część: Logi
@@ -132,18 +136,21 @@ class MainWindow(QWidget):
                              'HDL': 'mmol/L',
                              'LDL': 'mmol/l',
                              'VLDL': 'mmol/L'}
-        # Opcje filtrowania
-        self.left_layout.addWidget(QLabel('Filter by'))
+
+        # Grupa: Filtry
+        self.filter_group_box = QGroupBox('🔍 Filter by:')
+        filter_layout = QVBoxLayout()
+
+        filter_layout.addWidget(QLabel('Filter by:'))
 
         self.filter_column_combo = QComboBox()
         self.filter_column_combo.currentIndexChanged.connect(self.update_filter_values)
-        self.left_layout.addWidget(self.filter_column_combo)
+        filter_layout.addWidget(self.filter_column_combo)
 
         # Dla kolumn z wartościami numerycznymi
         self.filter_min_spinbox = QDoubleSpinBox()
         self.filter_max_spinbox = QDoubleSpinBox()
 
-        # Domyślny zakres na start
         self.filter_min_spinbox.setRange(0, 1000)
         self.filter_max_spinbox.setRange(0, 1000)
 
@@ -172,26 +179,31 @@ class MainWindow(QWidget):
         self.left_layout.addWidget(self.category_filter_combo)
         self.category_filter_combo.hide()
 
+        self.filter_group_box.setLayout(filter_layout)
+        self.left_layout.addWidget(self.filter_group_box)
+
         # Grupowanie: wybór kolumn
 
-        self.grouping_section_label = QLabel('Group by:')
-        self.left_layout.addWidget(self.grouping_section_label)
+        # Grupa: Grouping
+        self.grouping_group_box = QGroupBox('📑 Group by:')
+        grouping_layout = QVBoxLayout()
 
         self.group_column_combo = QComboBox()
         self.group_column_combo.currentIndexChanged.connect(self.update_numeric_columns)
-
-        self.left_layout.addWidget(self.group_column_combo)
+        grouping_layout.addWidget(self.group_column_combo)
 
         self.agg_column_combo = QComboBox()
-        self.left_layout.addWidget(self.agg_column_combo)
+        grouping_layout.addWidget(self.agg_column_combo)
 
-        # Checkbox: tryb surowych danych
         self.raw_data_checkbox = QCheckBox('Use raw data (no aggregation)')
         self.raw_data_checkbox.setChecked(False)
         self.raw_data_checkbox.stateChanged.connect(self.update_ui)
+        grouping_layout.addWidget(self.raw_data_checkbox)
 
-        self.left_layout.addWidget(self.raw_data_checkbox)
+        self.grouping_group_box.setLayout(grouping_layout)
+        self.left_layout.addWidget(self.grouping_group_box)
 
+        # Grupa: funkcje agregujące
         self.agg_func_group = QButtonGroup(self)
         self.agg_func_buttons = {}
 
@@ -202,8 +214,10 @@ class MainWindow(QWidget):
             'min': 'Minimum values',
             'max': 'Maximum values'
         }
-        # Wyświetlanie przycisków w dwóch kolumnach
+
+        self.agg_func_groupbox = QGroupBox('Aggregate by:')
         agg_func_layout = QGridLayout()
+
         row = 0
         col = 0
 
@@ -214,13 +228,14 @@ class MainWindow(QWidget):
             self.agg_func_group.addButton(btn)
             self.agg_func_buttons[func_key] = btn
 
-            # Przełączanie kolumny co drugi przycisk
             col += 1
             if col > 1:
                 col = 0
                 row += 1
 
-        self.left_layout.addLayout(agg_func_layout)
+        self.agg_func_groupbox.setLayout(agg_func_layout)
+        self.left_layout.addWidget(self.agg_func_groupbox)
+
         # Przyciski w dolnej części okna
         self.gender_checkbox = QCheckBox('Show gender differences')
         self.gender_checkbox.setChecked(False)
@@ -246,7 +261,10 @@ class MainWindow(QWidget):
 
         self.left_layout.addWidget(self.options_box)
 
-        # Przyciski do generowania wykresów
+        # Wybór typu wykresu i generowanie
+        self.chart_group_box = QGroupBox('📈 Chart:')
+        chart_layout = QVBoxLayout()
+
         self.chart_type_combo = QComboBox()
         self.chart_type_combo.addItem('Select chart type')
         self.chart_type_combo.addItems([
@@ -261,20 +279,41 @@ class MainWindow(QWidget):
         self.left_layout.addWidget(self.chart_type_combo)
 
         self.chart_type_combo.currentIndexChanged.connect(self.chart_type_changed)
-        self.chart_type_changed()
 
-        self.group_execute_btn = QPushButton('📈 Generate chart')
+        chart_layout.addWidget(self.chart_type_combo)
+
+        self.group_execute_btn = QPushButton('Generate chart')
         self.group_execute_btn.clicked.connect(self.update_chart)
+        chart_layout.addWidget(self.group_execute_btn)
 
-        self.left_layout.addWidget(self.group_execute_btn)
+        self.chart_group_box.setLayout(chart_layout)
+        self.left_layout.addWidget(self.chart_group_box)
+
+        # Generowanie raportów
+        self.report_box = QGroupBox('📄 Generate report')
+        self.report_layout = QVBoxLayout()
+
+        # Layout poziomy dla przycisków
+        report_button_layout = QHBoxLayout()
+
+        self.generate_csv_btn = QPushButton('Generate CSV report')
+        self.generate_pdf_btn = QPushButton('Generate PDF report')
+
+        report_button_layout.addWidget(self.generate_csv_btn)
+        report_button_layout.addWidget(self.generate_pdf_btn)
+
+        self.report_layout.addLayout(report_button_layout)
+        self.report_box.setLayout(self.report_layout)
+
+        self.left_layout.addWidget(self.report_box)
+
+        # Podłączamy sygnały do funkcji generujących raporty
+        self.generate_csv_btn.clicked.connect(lambda: self.generate_report('csv'))
+        self.generate_pdf_btn.clicked.connect(lambda: self.generate_report('pdf'))
+
         # Dodatkowe funkcje
 
-        self.generate_report_btn = QPushButton('📄 Generate report')
-        self.generate_report_btn.clicked.connect(self.generate_report)
-
-        self.left_layout.addWidget(self.generate_report_btn)
-
-        self.clear_filters_btn = QPushButton('❌ Reset filters and grouping')
+        self.clear_filters_btn = QPushButton('❌ Reset settings')
         self.clear_filters_btn.clicked.connect(self.clear_filters)
 
         self.left_layout.addWidget(self.clear_filters_btn)
@@ -285,9 +324,6 @@ class MainWindow(QWidget):
         self.main_layout.addLayout(self.center_layout, 2)
         self.main_layout.addWidget(self.bottom_box, 1)
 
-        self.grouping_section_label.setVisible(True)
-        self.group_column_combo.setVisible(True)
-        self.agg_column_combo.setVisible(True)
         self.setLayout(self.main_layout)
 
     def clear_filters(self):
@@ -352,7 +388,7 @@ class MainWindow(QWidget):
             return self.data.copy()
 
         col_data = self.data[filter_col]
-        filter_description = ""  # do raportu pdf
+
         # Filtrowanie w kolumnach z wartościami numerycznymi
         if pd.api.types.is_numeric_dtype(col_data):
             min_val = self.filter_min_spinbox.value()
@@ -541,17 +577,18 @@ class MainWindow(QWidget):
         Przygotowuje etykiety i tytuł wykresu na podstawie wybranych kolumn i trybu agregacji.
         Zwraca słownik z tytułem wykresu i opisami osi.
         """
-        # Wyodrębnienie podstawowych nazw kolumn (dla kolumn zbinowanych)
-        x_base = x_col.split(' (')[0]
-        y_base = y_col.split(' (')[0] if y_col else ''
+
+        # Wyodrębnienie nazw bazowych
+        x_base = x_col.replace(' in ranges', '').strip()
+        y_base = y_col.strip() if y_col else None
 
         # Jednostki
         x_unit = self.column_units.get(x_base, '')
-        y_unit = self.column_units.get(y_base, '') if agg_func != 'count' and y_col else ''
+        y_unit = self.column_units.get(y_base, '') if agg_func != 'count' and y_base else ''
 
-        # Etykiety — nazwy kolumn ze słownika
-        x_label = self.column_labels.get(x_col, x_col)
-        y_label = self.column_labels.get(y_col, y_col) if y_col else ''
+        # Etykiety
+        x_label = self.column_labels.get(x_col, self.column_labels.get(x_base, x_col))
+        y_label = self.column_labels.get(y_col, self.column_labels.get(y_base, y_col)) if y_col else ''
 
         # Tytuł wykresu
         if is_raw_mode:
@@ -585,7 +622,7 @@ class MainWindow(QWidget):
                 return
 
             x_col = group_col
-            y_col = self.agg_column_combo.currentData()  # lub inna odpowiednia kolumna w raw mode
+            y_col = self.agg_column_combo.currentData()
             agg_func = None
             hue_col = None
 
@@ -735,6 +772,10 @@ class MainWindow(QWidget):
                 plot = plot_func(ax, data, x_col, y_col, agg_func)
             elif selected_chart == 'Scatter Plot':
                 plot = plot_func(ax, data, x_col, y_col, hue_col, raw_mode)
+                if plot:
+                    ax.set_xlabel(x_label)
+                    ax.set_ylabel(y_label)
+                    ax.grid(True)
             else:
                 plot = plot_func(ax, data, x_col, y_col, hue_col)
                 if plot:
@@ -832,10 +873,10 @@ class MainWindow(QWidget):
             else:
                 legend_labels = list(labels)
 
-            original_col = x_col.replace('binned_', '') if x_col.startswith('binned_') else x_col
+            original_col = x_col.strip(' in ranges') if x_col.endswith(' in ranges') else x_col
             column_label = self.column_labels.get(original_col, original_col)
             unit = self.column_units.get(original_col, '')
-            legend_title = f'Legend – {column_label}'
+            legend_title = f'Legend – {column_label} ({unit})'
 
             # Tworzenie legendy
             ax.legend(
@@ -897,6 +938,21 @@ class MainWindow(QWidget):
         """
         Reaguje na zmianę typu wykresu — odświeża dane filtrowania i UI.
         """
+        # Sprawdzenie, czy dane są załadowane i dostępne
+        if not hasattr(self, 'data') or self.data is None or self.data.empty:
+            self.log_area.append("Data not loaded yet, skipping chart update.")
+            return
+
+        index = self.chart_type_combo.currentIndex()
+
+        # Jeśli wybrano 'Select chart type'
+        if index == 0:
+            self.log_area.append("No chart type selected.")
+            return
+
+        chart_type = self.chart_type_combo.currentText()
+        self.log_area.append(f"Chart type changed to: {chart_type}")
+
         self.update_filter_column_options()
         self.update_ui()
 
@@ -1203,7 +1259,7 @@ class MainWindow(QWidget):
         self.filter_column_combo.setEnabled(True)
 
         # Grupowanie domyślnie widoczne i aktywne
-        self.grouping_section_label.setVisible(True)
+        self.grouping_group_box.setVisible(True)
         self.group_column_combo.setVisible(True)
         self.group_column_combo.setEnabled(True)
 
@@ -1247,7 +1303,7 @@ class MainWindow(QWidget):
 
             # Grupowanie aktywne
             self.group_column_combo.setEnabled(True)
-            self.grouping_section_label.setVisible(True)
+            self.grouping_group_box.setVisible(True)
 
             self.raw_data_checkbox.setChecked(False)
             self.raw_data_checkbox.setEnabled(False)
@@ -1279,14 +1335,14 @@ class MainWindow(QWidget):
 
         # Jeśli tryb raw
         if is_raw:
-            # Wymusz Scatter Plot i zablokuj wybór wykresu
+            # Wymuszanie Scatter Plot i zablokuj wybór wykresu
             if selected_chart != 'Scatter Plot':
                 self.chart_type_combo.setCurrentText('Scatter Plot')
             self.chart_type_combo.setEnabled(False)
             self.chart_type_combo.setToolTip('Only Scatter Plot is available in raw data mode.')
 
             # Grupowanie widoczne i aktywne
-            self.grouping_section_label.setVisible(True)
+            self.grouping_group_box.setVisible(True)
             self.group_column_combo.setVisible(True)
             self.group_column_combo.setEnabled(True)
 
@@ -1313,7 +1369,7 @@ class MainWindow(QWidget):
         self.filter_column_combo.setVisible(True)
         self.filter_column_combo.setEnabled(True)
 
-        self.grouping_section_label.setVisible(True)
+        self.grouping_group_box.setVisible(True)
         self.group_column_combo.setVisible(True)
         self.group_column_combo.setEnabled(True)
 
@@ -1344,26 +1400,22 @@ class MainWindow(QWidget):
 
     # Wczytanie pliku-CSV/SQLite
     def data_load_update(self):
-        """
-        Aktualizuje interfejs użytkownika i logi po załadowaniu danych. Ustawia widoczność i dostępność elementów GUI.
-        """
-        if self.data is not None:
-            self.log_area.append('Data has been processed.')
+        try:
+            if self.data is not None:
+                print("Data loaded:", type(self.data))
+                self.log_area.append('Data has been processed.')
+                self.update_filter_column_options()
+                self.update_grouping_column_options()
+                self.update_checkboxes_visibility()
 
-            self.update_filter_column_options()
-            self.update_grouping_column_options()
-            self.gender_checkbox.setVisible(True)
-            self.bin_checkbox.setVisible(True)
-            self.update_checkboxes_visibility()
-
-            self.group_execute_btn.setVisible(True)
-            self.generate_report_btn.setVisible(True)
-            self.clear_filters_btn.setVisible(True)
-        else:
-            self.log_area.append('An error occurred while processing data.')
-            self.group_execute_btn.setVisible(False)
-            self.generate_report_btn.setVisible(False)
-            self.clear_filters_btn.setVisible(False)
+            else:
+                self.log_area.append('An error occurred while processing data.')
+                print("Data is None.")
+        except Exception as e:
+            import traceback
+            print("❌ Error during data_load_update:", e)
+            traceback.print_exc()
+            self.log_area.append(f"❌ Error: {e}")
 
     def select_csv_file(self):
         """
@@ -1411,17 +1463,13 @@ class MainWindow(QWidget):
 
         except Exception as e:
             self.log_area.append(f"Error while loading data from database: {str(e)}")
-            self.group_execute_btn.setVisible(False)
-            self.generate_report_btn.setVisible(False)
-            self.clear_filters_btn.setVisible(False)
 
     # Eksport wyników do pliku CSV.
-    def generate_report(self):
+    def generate_report(self, report_format):
         """
         Przygotowuje dane w zależności od trybu i wywołuje odpowiednią funkcję eksportu.
         """
         chart_type = self.chart_type_combo.currentText()
-
         if self.raw_data_checkbox.isChecked() or chart_type in ['Heatmap', 'Histogram']:
             df = self.get_filtered_data()
         else:
@@ -1431,23 +1479,29 @@ class MainWindow(QWidget):
             self.log_area.append('No data to export.')
             return
 
-        path, filetype = QFileDialog.getSaveFileName(
-            self, 'Save Report', '', 'CSV Files (*.csv);;PDF Files (*.pdf);;All Files (*)'
-        )
+        if report_format == 'csv':
+            dialog_title = 'Save CSV Report'
+            file_filter = 'CSV Files (*.csv)'
+        elif report_format == 'pdf':
+            dialog_title = 'Save PDF Report'
+            file_filter = 'PDF Files (*.pdf)'
+        else:
+            self.log_area.append(f'Unsupported report format: {report_format}')
+            return
 
+        path, _ = QFileDialog.getSaveFileName(
+            self, dialog_title, '', file_filter
+        )
         if not path:
             return
 
         try:
-            if filetype == 'CSV Files (*.csv)' or path.endswith('.csv'):
+            if report_format == 'csv':
                 self.generate_csv_report(df, path)
-            elif filetype == 'PDF Files (*.pdf)' or path.endswith('.pdf'):
-                self.generate_pdf_report(df, path)
             else:
-                self.log_area.append('Unsupported file format selected.')
-
+                self.generate_pdf_report(df, path)
         except Exception as e:
-            self.log_area.append(f'Failed to save the report:\n{str(e)}')
+            self.log_area.append(f'Failed to save {report_format.upper()} report:\n{str(e)}')
 
     def generate_csv_report(self, df, path):
         """
@@ -1458,15 +1512,6 @@ class MainWindow(QWidget):
             self.log_area.append(f'Report successfully saved as CSV:\n{path}')
         except Exception as e:
             self.log_area.append(f'Failed to save CSV report:\n{str(e)}')
-
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas
-    from reportlab.platypus import Table, TableStyle
-    from reportlab.lib import colors
-    import math
-    import os
-    from datetime import datetime
-    import tempfile
 
     def generate_pdf_report(self, df, path):
         try:
