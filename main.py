@@ -48,6 +48,8 @@ class MainWindow(QWidget):
 
     def __init__(self):
         super().__init__()
+
+        # Inicjalizacja stanu
         self.data_source = None
         self.grouping_columns = None
         self.applied_filters = None
@@ -56,158 +58,202 @@ class MainWindow(QWidget):
         self.canvas = None
         self.current_figure = None
         self.current_plot_data = None
+
+        # Etykiety i jednostki kolumn
+        self.column_labels = {
+            'Gender': 'Gender',
+            'AGE': 'Age',
+            'Urea': 'Urea level in blood',
+            'Cr': 'Creatinine',
+            'HbA1c': 'HbA1c level',
+            'Chol': 'Cholesterol',
+            'TG': 'Triglycerides',
+            'HDL': 'HDL',
+            'LDL': 'LDL',
+            'VLDL': 'VLDL',
+            'BMI': 'BMI',
+            'CLASS': 'Diabetes risk classification'
+        }
+
+        self.column_units = {
+            'Urea': 'mmol/L',
+            'AGE': 'years',
+            'Cr': 'μmol/L',
+            'HbA1c': '%',
+            'Chol': 'mmol/L',
+            'TG': 'mmol/L',
+            'HDL': 'mmol/L',
+            'LDL': 'mmol/L',
+            'VLDL': 'mmol/L'
+        }
+
+        # Ustawienia okna
         self.setWindowTitle('Data analysis')
         self.setGeometry(100, 100, 1200, 800)
 
+        #  Główne layouty
         self.main_layout = QVBoxLayout()
         self.center_layout = QHBoxLayout()
-
-        # Lewa część okna
         self.left_layout = QVBoxLayout()
-        self.left_box = QWidget()
-        self.left_box.setLayout(self.left_layout)
-
-        self.left_box.setMinimumWidth(200)
-
-        # Prawa część: Wizualizacje
-        self.right_box = QGroupBox('📊 Charts')
         self.right_layout = QVBoxLayout()
-        self.right_box.setLayout(self.right_layout)
 
-        # QScrollArea dla lewej części
-        self.left_scroll_area = QScrollArea()
-        self.left_scroll_area.setWidgetResizable(True)
-        self.left_scroll_area.setWidget(self.left_box)  # lewy panel - widget przewijany
+        #  Tworzenie sekcji GUI
+        self._create_left_panel()
+        self._create_right_panel()
+        self._create_bottom_panel()
+
+        #  Składanie layoutów
         self.center_layout.addWidget(self.left_scroll_area, 1)
         self.center_layout.addWidget(self.right_box, 2)
+        self.main_layout.addWidget(self.load_file_box)
+        self.main_layout.addLayout(self.center_layout, 2)
+        self.main_layout.addWidget(self.bottom_box, 1)
 
-        # Dolna część: Logi
+        #  Finalne ustawienia interfejsu
+        self.set_controls_enabled(False)
+        self.setLayout(self.main_layout)
+
+    def _create_left_panel(self):
+        """Tworzy lewą część interfejsu"""
+        self.left_box = QWidget()
+        self.left_box.setLayout(self.left_layout)
+        self.left_box.setMinimumWidth(200)
+
+        # Ładowanie plików
+        self._create_load_file_section()
+
+        # Filtry
+        self._create_filter_section()
+
+        # Grupowanie
+        self._create_grouping_section()
+
+        # Funkcje agregujące
+        self._create_aggregation_section()
+
+        # Opcje wykresu
+        self._create_options_section()
+
+        # Wykresy
+        self._create_chart_section()
+
+        # Raporty
+        self._create_report_section()
+
+        # Reset ustawień
+        self.clear_filters_btn = QPushButton('❌ Reset settings')
+        self.clear_filters_btn.clicked.connect(self.clear_filters)
+        self.left_layout.addWidget(self.clear_filters_btn)
+
+        # Scroll area
+        self.left_scroll_area = QScrollArea()
+        self.left_scroll_area.setWidgetResizable(True)
+        self.left_scroll_area.setWidget(self.left_box)
+
+    def _create_right_panel(self):
+        """Panel z wizualizacjami (wykresami)."""
+        self.right_box = QGroupBox('📊 Charts')
+        self.right_box.setLayout(self.right_layout)
+
+    def _create_bottom_panel(self):
+        """Panel dolny (logi)."""
         self.bottom_box = QGroupBox('📝 Logs')
-        self.bottom_layout = QVBoxLayout()
+        bottom_layout = QVBoxLayout()
         self.label = QLabel('No file selected')
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
         self.log_area.setFixedHeight(150)
 
-        self.bottom_layout.addWidget(self.label)
-        self.bottom_layout.addWidget(self.log_area)
-        self.bottom_box.setLayout(self.bottom_layout)
+        bottom_layout.addWidget(self.label)
+        bottom_layout.addWidget(self.log_area)
+        self.bottom_box.setLayout(bottom_layout)
 
-        # Nagłówek sekcji ładowania plików
+    def _create_load_file_section(self):
+        """Sekcja: Ładowanie danych."""
         self.load_file_box = QGroupBox('📁 Load file:')
-        self.load_file_layout = QVBoxLayout()
+        layout = QVBoxLayout()
 
-        # Przyciski wyboru plików
+        # Przyciski wyboru pliku
+        file_button_layout = QHBoxLayout()
         self.csv_button = QPushButton('Select CSV File')
         self.csv_button.clicked.connect(self.select_csv_file)
-
         self.db_button = QPushButton('Select SQLite Database')
         self.db_button.clicked.connect(self.load_data_from_sqlite)
-
-        # Układ poziomy dla przycisków
-        file_button_layout = QHBoxLayout()
         file_button_layout.addWidget(self.csv_button)
         file_button_layout.addWidget(self.db_button)
 
-        # Dodajemy układ z przyciskami do głównego layoutu grupy
-        self.load_file_layout.addLayout(file_button_layout)
-        self.load_file_box.setLayout(self.load_file_layout)
+        layout.addLayout(file_button_layout)
+        self.load_file_box.setLayout(layout)
 
-        # LEWA CZĘŚĆ: FILTRY I GRUPOWANIE ===
-
-        self.column_labels = {'Gender': 'Gender',
-                              'AGE': 'Age',
-                              'Urea': 'Urea level in blood',
-                              'Cr': 'Creatinine',
-                              'HbA1c': 'HbA1c level',
-                              'Chol': 'Cholesterol',
-                              'TG': 'Triglycerides',
-                              'HDL': 'HDL',
-                              'LDL': 'LDL',
-                              'VLDL': 'VLDL',
-                              'BMI': 'BMI',
-                              'CLASS': 'Diabetes risk classification'}
-        self.column_units = {'Urea': 'mmol/L',
-                             'AGE': 'years',
-                             'Cr': 'μmol/L',
-                             'HbA1c': '%',
-                             'Chol': 'mmol/L',
-                             'TG': 'mmol/L',
-                             'HDL': 'mmol/L',
-                             'LDL': 'mmol/l',
-                             'VLDL': 'mmol/L'}
-
-        # Grupa: Filtry
+    def _create_filter_section(self):
+        """Sekcja: Filtry."""
         self.filter_group_box = QGroupBox('🔍 Filter by:')
-        filter_layout = QVBoxLayout()
+        layout = QVBoxLayout()
 
-        filter_layout.addWidget(QLabel('Filter by:'))
-
+        layout.addWidget(QLabel('Filter by:'))
         self.filter_column_combo = QComboBox()
         self.filter_column_combo.currentIndexChanged.connect(self.update_filter_values)
-        filter_layout.addWidget(self.filter_column_combo)
+        layout.addWidget(self.filter_column_combo)
 
-        # Dla kolumn z wartościami numerycznymi
+        #  Filtry numeryczne
         self.filter_min_spinbox = QDoubleSpinBox()
         self.filter_max_spinbox = QDoubleSpinBox()
-
-        self.filter_min_spinbox.setRange(0, 1000)
-        self.filter_max_spinbox.setRange(0, 1000)
-
+        for spin in (self.filter_min_spinbox, self.filter_max_spinbox):
+            spin.setRange(0, 1000)
+            spin.setDecimals(1)
         self.filter_min_spinbox.setPrefix('From: ')
-        self.filter_max_spinbox.setPrefix('To:')
+        self.filter_max_spinbox.setPrefix('To: ')
 
-        self.filter_min_spinbox.setDecimals(1)  # wyświetla 1 miejsce po przecinku
-        self.filter_max_spinbox.setDecimals(1)
-
-        spinbox_layout = QHBoxLayout()
-        spinbox_layout.addWidget(self.filter_min_spinbox)
-        spinbox_layout.addWidget(self.filter_max_spinbox)
-
-        self.left_layout.addLayout(spinbox_layout)
+        spin_layout = QHBoxLayout()
+        spin_layout.addWidget(self.filter_min_spinbox)
+        spin_layout.addWidget(self.filter_max_spinbox)
+        layout.addLayout(spin_layout)
 
         self.filter_min_spinbox.hide()
         self.filter_max_spinbox.hide()
 
-        # Dla kolumn z wartościami nienumerycznymi
+        #  Filtry kategoryczne
         self.category_combo_label = QLabel('Select value:')
-        self.left_layout.addWidget(self.category_combo_label)
-        self.category_combo_label.hide()
-
         self.category_filter_combo = QComboBox()
         self.category_filter_combo.currentIndexChanged.connect(self.category_combo_changed)
-        self.left_layout.addWidget(self.category_filter_combo)
+
+        layout.addWidget(self.category_combo_label)
+        layout.addWidget(self.category_filter_combo)
+        self.category_combo_label.hide()
         self.category_filter_combo.hide()
 
-        self.filter_group_box.setLayout(filter_layout)
+        self.filter_group_box.setLayout(layout)
         self.left_layout.addWidget(self.filter_group_box)
 
-        # Grupowanie: wybór kolumn
-
-        # Grupa: Grouping
+    def _create_grouping_section(self):
+        """Sekcja: Grupowanie."""
         self.grouping_group_box = QGroupBox('📑 Group by:')
-        grouping_layout = QVBoxLayout()
+        layout = QVBoxLayout()
 
         self.group_column_combo = QComboBox()
         self.group_column_combo.currentIndexChanged.connect(self.update_numeric_columns)
-        grouping_layout.addWidget(self.group_column_combo)
-
         self.agg_column_combo = QComboBox()
-        grouping_layout.addWidget(self.agg_column_combo)
 
         self.raw_data_checkbox = QCheckBox('Use raw data (no aggregation)')
         self.raw_data_checkbox.setChecked(False)
         self.raw_data_checkbox.stateChanged.connect(self.update_ui)
-        grouping_layout.addWidget(self.raw_data_checkbox)
 
-        self.grouping_group_box.setLayout(grouping_layout)
+        layout.addWidget(self.group_column_combo)
+        layout.addWidget(self.agg_column_combo)
+        layout.addWidget(self.raw_data_checkbox)
+
+        self.grouping_group_box.setLayout(layout)
         self.left_layout.addWidget(self.grouping_group_box)
 
-        # Grupa: funkcje agregujące
+    def _create_aggregation_section(self):
+        """Sekcja: Funkcje agregujące."""
+        self.agg_func_groupbox = QGroupBox('Aggregate by:')
+        layout = QGridLayout()
+
         self.agg_func_group = QButtonGroup(self)
         self.agg_func_buttons = {}
 
-        agg_functions = {
+        functions = {
             'mean': 'Average values',
             'median': 'Median values',
             'count': 'Number of patients',
@@ -215,116 +261,78 @@ class MainWindow(QWidget):
             'max': 'Maximum values'
         }
 
-        self.agg_func_groupbox = QGroupBox('Aggregate by:')
-        agg_func_layout = QGridLayout()
-
-        row = 0
-        col = 0
-
-        for i, (func_key, func_label) in enumerate(agg_functions.items()):
-            btn = QRadioButton(func_label)
+        row = col = 0
+        for key, label in functions.items():
+            btn = QRadioButton(label)
             btn.toggled.connect(self.update_ui)
-            agg_func_layout.addWidget(btn, row, col)
+            layout.addWidget(btn, row, col)
             self.agg_func_group.addButton(btn)
-            self.agg_func_buttons[func_key] = btn
-
+            self.agg_func_buttons[key] = btn
             col += 1
             if col > 1:
                 col = 0
                 row += 1
 
-        self.agg_func_groupbox.setLayout(agg_func_layout)
+        self.agg_func_groupbox.setLayout(layout)
         self.left_layout.addWidget(self.agg_func_groupbox)
 
-        # Przyciski w dolnej części okna
+    def _create_options_section(self):
+        """Sekcja: Opcje wykresu."""
         self.gender_checkbox = QCheckBox('Show gender differences')
-        self.gender_checkbox.setChecked(False)
-
         self.bin_checkbox = QCheckBox('Show data in ranges')
-        self.bin_checkbox.setChecked(False)
-
         self.trendline_checkbox = QCheckBox("Show trend line")
-        self.trendline_checkbox.setChecked(False)
-        self.bin_checkbox.stateChanged.connect(self.update_checkboxes_visibility)
-        self.trendline_checkbox.stateChanged.connect(self.update_checkboxes_visibility)
 
-        self.raw_data_checkbox.stateChanged.connect(self.update_checkboxes_visibility)
+        for cb in (self.bin_checkbox, self.trendline_checkbox, self.raw_data_checkbox):
+            cb.stateChanged.connect(self.update_checkboxes_visibility)
 
-        # Layout siatki: 2 kolumny
-        options_layout = QGridLayout()
-        options_layout.addWidget(self.gender_checkbox, 0, 0)
-        options_layout.addWidget(self.bin_checkbox, 0, 1)
-        options_layout.addWidget(self.trendline_checkbox, 1, 0)
+        layout = QGridLayout()
+        layout.addWidget(self.gender_checkbox, 0, 0)
+        layout.addWidget(self.bin_checkbox, 0, 1)
+        layout.addWidget(self.trendline_checkbox, 1, 0)
 
         self.options_box = QGroupBox('Options:')
-        self.options_box.setLayout(options_layout)
-
+        self.options_box.setLayout(layout)
         self.left_layout.addWidget(self.options_box)
 
-        # Wybór typu wykresu i generowanie
+    def _create_chart_section(self):
+        """Sekcja: Wybór i generowanie wykresów."""
         self.chart_group_box = QGroupBox('📈 Chart:')
-        chart_layout = QVBoxLayout()
+        layout = QVBoxLayout()
 
         self.chart_type_combo = QComboBox()
         self.chart_type_combo.addItem('Select chart type')
         self.chart_type_combo.addItems([
-            'Bar Chart',
-            'Pie Chart',
-            'Line Chart',
-            'Scatter Plot',
-            'Histogram',
-            'Heatmap'
+            'Bar Chart', 'Pie Chart', 'Line Chart',
+            'Scatter Plot', 'Histogram', 'Heatmap'
         ])
-
-        self.left_layout.addWidget(self.chart_type_combo)
-
         self.chart_type_combo.currentIndexChanged.connect(self.chart_type_changed)
-
-        chart_layout.addWidget(self.chart_type_combo)
 
         self.group_execute_btn = QPushButton('Generate chart')
         self.group_execute_btn.clicked.connect(self.update_chart)
-        chart_layout.addWidget(self.group_execute_btn)
 
-        self.chart_group_box.setLayout(chart_layout)
+        layout.addWidget(self.chart_type_combo)
+        layout.addWidget(self.group_execute_btn)
+
+        self.chart_group_box.setLayout(layout)
         self.left_layout.addWidget(self.chart_group_box)
 
-        # Generowanie raportów
+    def _create_report_section(self):
+        """Sekcja: Raporty (CSV, PDF)."""
         self.report_box = QGroupBox('📄 Generate report')
-        self.report_layout = QVBoxLayout()
+        layout = QVBoxLayout()
 
-        # Layout poziomy dla przycisków
-        report_button_layout = QHBoxLayout()
-
+        btn_layout = QHBoxLayout()
         self.generate_csv_btn = QPushButton('Generate CSV report')
         self.generate_pdf_btn = QPushButton('Generate PDF report')
-
-        report_button_layout.addWidget(self.generate_csv_btn)
-        report_button_layout.addWidget(self.generate_pdf_btn)
-
-        self.report_layout.addLayout(report_button_layout)
-        self.report_box.setLayout(self.report_layout)
-
-        self.left_layout.addWidget(self.report_box)
-
-        # Podłączamy sygnały do funkcji generujących raporty
         self.generate_csv_btn.clicked.connect(lambda: self.generate_report('csv'))
         self.generate_pdf_btn.clicked.connect(lambda: self.generate_report('pdf'))
 
-        # Dodatkowe funkcje
+        btn_layout.addWidget(self.generate_csv_btn)
+        btn_layout.addWidget(self.generate_pdf_btn)
+        layout.addLayout(btn_layout)
 
-        self.clear_filters_btn = QPushButton('❌ Reset settings')
-        self.clear_filters_btn.clicked.connect(self.clear_filters)
-
-        self.left_layout.addWidget(self.clear_filters_btn)
-
-        # Layout końcowy
-
-        self.main_layout.addWidget(self.load_file_box)
-        self.main_layout.addLayout(self.center_layout, 2)
-        self.main_layout.addWidget(self.bottom_box, 1)
-
-        self.setLayout(self.main_layout)
+        self.report_box.setLayout(layout)
+        self.left_layout.addWidget(self.report_box)
 
     def clear_filters(self):
         """
@@ -876,17 +884,17 @@ class MainWindow(QWidget):
             original_col = x_col.strip(' in ranges') if x_col.endswith(' in ranges') else x_col
             column_label = self.column_labels.get(original_col, original_col)
             unit = self.column_units.get(original_col, '')
-            legend_title = f'Legend – {column_label} ({unit})'
+            legend_title = f'Legend – {column_label}'
 
             # Tworzenie legendy
             ax.legend(
                 wedges,
                 legend_labels,
-                title=legend_title,
+                title=f'{legend_title} ({unit})' if unit else legend_title,
                 loc='center left',
                 bbox_to_anchor=(1, 0.5)
             )
-            ax.figure.subplots_adjust(right=0.75)
+            ax.figure.subplots_adjust(left=0.05, right=0.6)
             ax.axis('equal')
             return True
 
@@ -903,7 +911,7 @@ class MainWindow(QWidget):
         self.canvas = FigureCanvas(fig)
         self.right_layout.addWidget(self.canvas)
 
-        self.current_figure = fig  # zapisz aktualny wykres
+        self.current_figure = fig  # aktualny wykres
 
     def statistics(self, data, column):
         """
@@ -1223,7 +1231,7 @@ class MainWindow(QWidget):
 
     def binning_available(self, selected_chart, selected_group_col, is_raw, trendline_checked):
         """
-        Sprawdza, czy checkbox dzielący na przedziały może być aktywny na podstawie typu wykresu, kolumny i innych opcji.
+        Sprawdza, czy checkbox dzielący na przedziały może być aktywny na podstawie typu wykresu, kolumny i innych opcji
         """
         if selected_chart in ['Heatmap', 'Histogram']:
             return False
@@ -1390,6 +1398,34 @@ class MainWindow(QWidget):
 
         self.update_checkboxes_visibility()
 
+    def set_controls_enabled(self, enabled: bool):
+        """
+        Ustawia dostępność wszystkich comboboxów, checkboxów i przycisków
+        w zależności od tego, czy dane zostały wczytane.
+        """
+        # Comboboxy
+        self.filter_column_combo.setEnabled(enabled)
+        self.category_filter_combo.setEnabled(enabled)
+        self.group_column_combo.setEnabled(enabled)
+        self.agg_column_combo.setEnabled(enabled)
+        self.chart_type_combo.setEnabled(enabled)
+
+        # Checkboxy
+        self.gender_checkbox.setEnabled(enabled)
+        self.bin_checkbox.setEnabled(enabled)
+        self.trendline_checkbox.setEnabled(enabled)
+        self.raw_data_checkbox.setEnabled(enabled)
+
+        # Funkcje agregujące
+        for btn in self.agg_func_buttons.values():
+            btn.setEnabled(enabled)
+
+        # Przyciski raportów i wykresów
+        self.group_execute_btn.setEnabled(enabled)
+        self.generate_csv_btn.setEnabled(enabled)
+        self.generate_pdf_btn.setEnabled(enabled)
+        self.clear_filters_btn.setEnabled(enabled)
+
     def category_combo_changed(self):
         """
         Wyświetla komunikat, jeśli użytkownik zmieni wybraną wartość filtra
@@ -1402,20 +1438,18 @@ class MainWindow(QWidget):
     def data_load_update(self):
         try:
             if self.data is not None:
-                print("Data loaded:", type(self.data))
                 self.log_area.append('Data has been processed.')
                 self.update_filter_column_options()
                 self.update_grouping_column_options()
                 self.update_checkboxes_visibility()
 
+                # Odblokowanie elementów po załadowaniu danych
+                self.set_controls_enabled(True)
+
             else:
                 self.log_area.append('An error occurred while processing data.')
-                print("Data is None.")
         except Exception as e:
-            import traceback
-            print("❌ Error during data_load_update:", e)
-            traceback.print_exc()
-            self.log_area.append(f"❌ Error: {e}")
+            self.log_area.append(f"Error: {e}")
 
     def select_csv_file(self):
         """
