@@ -1,9 +1,9 @@
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QFileDialog, QScrollArea,
     QVBoxLayout, QHBoxLayout, QTextEdit, QGroupBox, QComboBox,
-    QRadioButton, QButtonGroup, QGridLayout, QDoubleSpinBox, QCheckBox, QInputDialog)
+    QRadioButton, QButtonGroup, QGridLayout, QDoubleSpinBox, QCheckBox)
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine
 
 import sys
 import pandas as pd
@@ -50,6 +50,8 @@ class MainWindow(QWidget):
         super().__init__()
 
         # Inicjalizacja stanu
+        self.db_engine = None
+        self.stats = None
         self.data_source = None
         self.grouping_columns = None
         self.applied_filters = None
@@ -698,8 +700,10 @@ class MainWindow(QWidget):
         col_unit = self.column_units.get(column, '')
 
         try:
-            # Oblicz statystyki
-            stats = self.statistics(data, column)
+            # Oblicz i zapisz statystyki
+            self.stats = self.statistics(data, column)
+            if self.stats is None:
+                return
 
             # Rysuj histogram
             sns.histplot(
@@ -712,10 +716,11 @@ class MainWindow(QWidget):
             )
 
             # Dodaj linie pionowe dla średniej i mediany
-            ax.axvline(stats['mean'], color='red', linestyle='--', linewidth=2,
-                       label=f"Mean: {stats['mean']:.2f}")
-            ax.axvline(stats['median'], color='green', linestyle=':', linewidth=2,
-                       label=f"Median: {stats['median']:.2f}")
+
+            ax.axvline(self.stats['mean'], color='red', linestyle='--', linewidth=2,
+                       label=f"Mean: {self.stats['mean']:.2f}")
+            ax.axvline(self.stats['median'], color='green', linestyle=':', linewidth=2,
+                       label=f"Median: {self.stats['median']:.2f}")
 
             # Dodaj tytuł, etykiety i legendę
             ax.set_title(f'Histogram of {col_name.lower()}')
@@ -915,33 +920,44 @@ class MainWindow(QWidget):
 
     def statistics(self, data, column):
         """
-        Oblicza i loguje statystyki (mean, median, std, min, max) dla wybranej kolumny
+        Oblicza i loguje statystyki dla wybranej kolumny numerycznej,
+        w tym mean, median, std, min, max, count oraz percentyle
         """
         values = data[column].dropna()
         if values.empty:
             self.log_area.append('No data available for statistics.')
             return None
 
+        col_label = self.column_labels.get(column, column)
+
         stats = {
+            'number of rows': values.count(),
             'mean': values.mean(),
             'median': values.median(),
             'std': values.std(),
             'min': values.min(),
-            'max': values.max()
+            'max': values.max(),
+            '25%': values.quantile(0.25),
+            '75%': values.quantile(0.75)
         }
-        self.log_area.append('--- Statistics ---')
+        self.log_area.append(f'--- Statistics for {col_label} ---')
         self.log_area.append(
             '\n'.join([
+                f"Count: {stats['count']}",
                 f"Mean: {stats['mean']:.2f}",
                 f"Median: {stats['median']:.2f}",
                 f"Std: {stats['std']:.2f}",
                 f"Min: {stats['min']:.2f}",
                 f"Max: {stats['max']:.2f}",
+                f"25%: {stats['25%']:.2f}",
+                f"75%: {stats['75%']:.2f}"
             ])
         )
+
         return stats
 
     # Dostosowywanie widoczności opcji interfejsu w zależności od typu wykresu i danych
+
     def chart_type_changed(self):
         """
         Reaguje na zmianę typu wykresu — odświeża dane filtrowania i UI.
@@ -1126,11 +1142,28 @@ class MainWindow(QWidget):
         for col in numeric_labeled_cols:
             label = self.column_labels[col]
             self.agg_column_combo.addItem(label, userData=col)
-
         self.agg_column_combo.setCurrentIndex(0)
 
-        self.group_execute_btn.setVisible(True)
+        if not pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
+            allowed = ["Select chart type", "Pie Chart", "Bar Chart"]
+        else:
+            allowed = ["Select chart type", "Histogram", "Scatter Plot", "Line Chart", "Pie Chart", "Bar Chart"]
 
+        current_chart = self.chart_type_combo.currentText()
+        self.chart_type_combo.blockSignals(True)
+        self.chart_type_combo.clear()
+        for chart in allowed:
+            self.chart_type_combo.addItem(chart)
+        if current_chart in allowed:
+            self.chart_type_combo.setCurrentText(current_chart)
+        else:
+            self.chart_type_combo.setCurrentIndex(0)
+            self.log_area.append(
+                f"Chart type reset: '{current_chart}' not allowed for column '{selected_group_col}'."
+            )
+        self.chart_type_combo.blockSignals(False)
+
+        self.group_execute_btn.setVisible(True)
         self.update_ui()
 
     def update_checkboxes_visibility(self):
@@ -1322,19 +1355,16 @@ class MainWindow(QWidget):
             # Filtr aktywny
             self.filter_column_combo.setEnabled(True)
 
-            # Grupowanie zablokowane
+            # Kolumna grupowania i agregacji nieaktywna
             self.group_column_combo.setEnabled(False)
-
-            # Kolumna agregacji niewidoczna i nieaktywna
-            self.agg_column_combo.setVisible(False)
             self.agg_column_combo.setEnabled(False)
 
-            # Przycisków agregacji wyłączone i odznaczone
+            # Przyciski wyłączone i odznaczone
             for btn in self.agg_func_buttons.values():
                 btn.setEnabled(False)
                 btn.setChecked(False)
 
-            # Checkboxy wyłączone i odznaczone (już ustawione)
+            # Checkboxy wyłączone i odznaczone
 
             self.raw_data_checkbox.setChecked(False)
             self.raw_data_checkbox.setEnabled(False)
@@ -1466,37 +1496,37 @@ class MainWindow(QWidget):
         self.data_load_update()
 
     def load_data_from_sqlite(self):
-        db_path, _ = QFileDialog.getOpenFileName(self, "Select SQLite database", "", "SQLite Database (*.db)")
-        if not db_path:
-            self.log_area.append("No database selected.")
-            return
+        db_path = "database.db"  # domyślna baza w katalogu projektu
 
+        # Jeśli domyślna baza nie istnieje, użytkownik może wybrać plik
         if not os.path.exists(db_path):
-            self.log_area.append(f"Database file not found: {db_path}")
-            return
+            self.log_area.append("Default database not found. Please select a database file.")
+            db_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select SQLite database",
+                "",
+                "SQLite Database (*.db)"
+            )
+            if not db_path:
+                self.log_area.append("No database selected. Operation cancelled.")
+                return
 
         try:
-            engine = create_engine(f"sqlite:///{db_path}")
-            inspector = inspect(engine)
+            # połączenie z bazą SQLite
+            self.db_engine = create_engine(f"sqlite:///{db_path}")
 
-            tables = inspector.get_table_names()
-            if not tables:
-                self.log_area.append("No tables found in the database.")
-                return
+            # wczytanie danych z tabeli 'patients'
+            self.data = pd.read_sql_table("patients", self.db_engine)
+            # aktualizacja GUI
 
-            table_name, ok = QInputDialog.getItem(self, "Select Table", "Choose table to load:", tables, editable=False)
-            if not ok or not table_name:
-                self.log_area.append("Table selection cancelled.")
-                return
+            self.log_area.append(f"Data loaded from table 'patients' in '{os.path.basename(db_path)}'.")
+            self.data_source = f"{os.path.basename(db_path)} → patients"
 
-            self.data = pd.read_sql_table(table_name, engine)
-            self.label.setText(f"Loaded table: {table_name}")
-            self.log_area.append(f"Data loaded from table '{table_name}' in '{os.path.basename(db_path)}'.")
-            self.data_source = f"{os.path.basename(db_path)} → {table_name}"
+            # aktualizacja danych w aplikacji
             self.data_load_update()
 
         except Exception as e:
-            self.log_area.append(f"Error while loading data from database: {str(e)}")
+            self.log_area.append(f"❌ Error while loading data from database: {str(e)}")
 
     # Eksport wyników do pliku CSV.
     def generate_report(self, report_format):
@@ -1561,7 +1591,7 @@ class MainWindow(QWidget):
             c = canvas.Canvas(path, pagesize=A4)
             width, height = A4
 
-            # Strona 1 - wykres i informacje
+            # === Strona 1 - wykres i informacje ===
             c.setFont('Helvetica-Bold', 16)
             c.drawString(50, height - 50, 'Data Report')
 
@@ -1579,7 +1609,7 @@ class MainWindow(QWidget):
                 c.drawString(50, text_y, line)
                 text_y -= 14
 
-            # Rysowanie wykresu
+            # === Wykres ===
             fig_width, fig_height = self.current_figure.get_size_inches()
             fig_dpi = self.current_figure.get_dpi()
             img_width_px = fig_width * fig_dpi
@@ -1589,14 +1619,31 @@ class MainWindow(QWidget):
             chart_width = width - 100
             chart_height = chart_width * aspect_ratio
 
-            c.drawImage(chart_path, 50, text_y - chart_height - 10, width=chart_width, height=chart_height)
+            # Pozycja wykresu
+            chart_bottom = text_y - chart_height - 10
+            c.drawImage(chart_path, 50, chart_bottom, width=chart_width, height=chart_height)
 
-            # Numeracja strony na dole
+            # Statystyki pod wykresem
+            stats = getattr(self, 'stats', None)
+            if stats:
+                c.setFont('Helvetica-Bold', 12)
+                c.drawString(50, chart_bottom - 25, 'Summary statistics:')
+
+                c.setFont('Helvetica', 10)
+                y_stat = chart_bottom - 45
+                line_height = 14
+                for key, value in stats.items():
+                    text = f"{key.capitalize():<8}: {value:.2f}" if isinstance(value,
+                                                                               (int, float)) else f"{key}: {value}"
+                    c.drawString(70, y_stat, text)
+                    y_stat -= line_height
+
+            # Numeracja strony
             c.setFont('Helvetica', 9)
             c.drawRightString(width - 50, 30, "Page 1")
             c.showPage()
 
-            # Strony z tabelą
+            # Strony z tabelą danych
             rows_per_page = 30
             data = [df.columns.tolist()] + df.values.tolist()
             total_pages = math.ceil(len(data[1:]) / rows_per_page)
@@ -1606,7 +1653,7 @@ class MainWindow(QWidget):
                 c.drawString(50, height - 50, 'Data Report (cont.)')
 
                 c.setFont('Helvetica', 9)
-                c.drawRightString(width - 50, 30, f"Page {page + 2}")
+                c.drawRightString(width - 50, 30, f"Page {page + 3}")  # +3 bo str.1 = wykres, str.2 = statystyki
 
                 start = page * rows_per_page + 1
                 end = start + rows_per_page
@@ -1631,7 +1678,6 @@ class MainWindow(QWidget):
 
             c.save()
             os.remove(chart_path)
-
             self.log_area.append(f'PDF report saved successfully:\n{path}')
 
         except Exception as e:
