@@ -65,9 +65,9 @@ class MainWindow(QWidget):
         self.column_labels = {
             'Gender': 'Gender',
             'AGE': 'Age',
-            'Urea': 'Urea level in blood',
+            'Urea': 'Urea',
             'Cr': 'Creatinine',
-            'HbA1c': 'HbA1c level',
+            'HbA1c': 'HbA1c',
             'Chol': 'Cholesterol',
             'TG': 'Triglycerides',
             'HDL': 'HDL',
@@ -91,7 +91,7 @@ class MainWindow(QWidget):
 
         # Ustawienia okna
         self.setWindowTitle('Data analysis')
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(100, 100, 1200, 700)
 
         #  Główne layouty
         self.main_layout = QVBoxLayout()
@@ -108,11 +108,11 @@ class MainWindow(QWidget):
         self.center_layout.addWidget(self.left_scroll_area, 1)
         self.center_layout.addWidget(self.right_box, 2)
         self.main_layout.addWidget(self.load_file_box)
-        self.main_layout.addLayout(self.center_layout, 2)
+        self.main_layout.addLayout(self.center_layout, 3)
         self.main_layout.addWidget(self.bottom_box, 1)
 
         #  Finalne ustawienia interfejsu
-        self.set_controls_enabled(False)
+        self.initialize_ui_state(enabled=False)
         self.setLayout(self.main_layout)
 
     def _create_left_panel(self):
@@ -164,7 +164,7 @@ class MainWindow(QWidget):
         self.label = QLabel('No file selected')
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
-        self.log_area.setFixedHeight(150)
+        self.log_area.setFixedHeight(100)
 
         bottom_layout.addWidget(self.label)
         bottom_layout.addWidget(self.log_area)
@@ -179,7 +179,7 @@ class MainWindow(QWidget):
         file_button_layout = QHBoxLayout()
         self.csv_button = QPushButton('Select CSV File')
         self.csv_button.clicked.connect(self.select_csv_file)
-        self.db_button = QPushButton('Select SQLite Database')
+        self.db_button = QPushButton('Connect with SQLite Database')
         self.db_button.clicked.connect(self.load_data_from_sqlite)
         file_button_layout.addWidget(self.csv_button)
         file_button_layout.addWidget(self.db_button)
@@ -192,7 +192,6 @@ class MainWindow(QWidget):
         self.filter_group_box = QGroupBox('🔍 Filter by:')
         layout = QVBoxLayout()
 
-        layout.addWidget(QLabel('Filter by:'))
         self.filter_column_combo = QComboBox()
         self.filter_column_combo.currentIndexChanged.connect(self.update_filter_values)
         layout.addWidget(self.filter_column_combo)
@@ -338,8 +337,9 @@ class MainWindow(QWidget):
 
     def clear_filters(self):
         """
-        Resetuje wszystkie filtry, grupowanie i opcje wykresów do wartości domyślnych.
+        Resetuje wszystkie filtry, grupowanie i typ wykresu oraz przywraca początkowy stan UI.
         """
+        # Reset dynamicznych wartości filtrów i grupowania
         self.filter_column_combo.setCurrentIndex(0)
         self.filter_min_spinbox.setValue(self.filter_min_spinbox.minimum())
         self.filter_max_spinbox.setValue(self.filter_max_spinbox.maximum())
@@ -348,7 +348,6 @@ class MainWindow(QWidget):
         self.category_filter_combo.setCurrentIndex(0)
         self.category_filter_combo.hide()
         self.category_combo_label.hide()
-
         self.group_column_combo.setCurrentIndex(0)
         self.agg_column_combo.setCurrentIndex(0)
 
@@ -357,19 +356,11 @@ class MainWindow(QWidget):
             btn.setChecked(False)
         self.agg_func_group.setExclusive(True)
 
-        self.gender_checkbox.setEnabled(True)
-        self.bin_checkbox.setEnabled(True)
-        self.raw_data_checkbox.setEnabled(True)
-        self.trendline_checkbox.setEnabled(True)
-        self.gender_checkbox.setChecked(False)
-        self.bin_checkbox.setChecked(False)
-        self.raw_data_checkbox.setChecked(False)
-        self.trendline_checkbox.setChecked(False)
-
         self.chart_type_combo.setCurrentIndex(0)
         self.clear_right_panel()
 
         self.update_ui()
+
         self.log_area.append('Filters and grouping have been reset.')
 
     def clear_right_panel(self):
@@ -417,6 +408,7 @@ class MainWindow(QWidget):
         else:
             filtered_df = self.data.copy()
             filter_description = "-"
+        #  Zapis informacji o filtrze
         self.applied_filters = filter_description
         return filtered_df
 
@@ -449,35 +441,36 @@ class MainWindow(QWidget):
         """
         Zwraca dane po filtrowaniu, binowaniu i agregacji według wybranych parametrów.
         """
+        # Filtrowanie
         df = self.get_filtered_data()
         if df is None or df.empty:
             return None
-
+        # Pobranie ustawień agregacji
         group_col = self.group_column_combo.currentData()
         agg_func = self.get_selected_agg_func()
         agg_col = self.agg_column_combo.currentData()
 
         if not group_col or not agg_func or (agg_func != 'count' and not agg_col):
             return None
-
+        # Grupowanie (uwzględnienie płci)
         group_cols = [group_col]
         if self.gender_checkbox.isChecked() and 'Gender' in df.columns:
             group_cols.append('Gender')
-
+        # Binowanie kolumny, jeśli zaznaczone
         df, group_col_or_binned = self.bin_column_if_needed(df, group_col)
         if group_col_or_binned != group_col:
             group_cols[0] = group_col_or_binned
-
+        # Agregacja
         grouped_df, y_col = self.aggregate_grouped_data(df, group_cols, agg_col, agg_func)
 
-        # do raportu pdf
+        # Dane do raportu
         self.grouping_columns = ", ".join(group_cols)
         if agg_func == 'count':
             self.aggregation_functions = "count (number of patients)"
         else:
             self.aggregation_functions = f"{agg_func} of '{agg_col}'"
 
-        # Zaokrąglenie tylko kolumn numerycznych
+        # Zaokrąglenie wartości tylko kolumn numerycznych
         for col in grouped_df.select_dtypes(include='number').columns:
             grouped_df[col] = grouped_df[col].round(2)
         return grouped_df
@@ -486,7 +479,7 @@ class MainWindow(QWidget):
         """
         Dodaje zbinowaną wersję kolumny grupującej, jeśli opcja binowania jest włączona.
         """
-        if self.bin_checkbox.isChecked() and pd.api.types.is_numeric_dtype(df[group_col]):
+        if self.bin_checkbox.isChecked() and group_col in df.columns and pd.api.types.is_numeric_dtype(df[group_col]):
             binned_col_name = f'{group_col} in ranges'
             df[binned_col_name] = self.bin_numeric_column(df[group_col], column_name=group_col)
             return df, binned_col_name
@@ -560,9 +553,11 @@ class MainWindow(QWidget):
         Generuje wykres na podstawie aktualnych ustawień użytkownika.
         Obsługuje różne typy wykresów (w tym histogram i heatmapę).
         """
+        # Czyszczenie poprzednich wykresów
         self.clear_right_panel()
         selected_chart = self.chart_type_combo.currentText()
 
+        # Histogram i heatmapa
         if selected_chart in ['Histogram', 'Heatmap']:
             df = self.get_filtered_data()
             if df is None or df.empty:
@@ -578,6 +573,7 @@ class MainWindow(QWidget):
                 self.generate_hist(df, column=filter_col)
             else:
                 self.generate_heatmap(df)
+        # Pozostałe typy wykresów
         else:
             raw_mode = self.raw_data_checkbox.isChecked()
             self.handle_other_charts(raw_mode=raw_mode)
@@ -588,15 +584,15 @@ class MainWindow(QWidget):
         Zwraca słownik z tytułem wykresu i opisami osi.
         """
 
-        # Wyodrębnienie nazw bazowych
+        # Wyodrębnienie nazw bazowych kolumn
         x_base = x_col.replace(' in ranges', '').strip()
-        y_base = y_col.strip() if y_col else None
+        y_base = y_col
 
         # Jednostki
         x_unit = self.column_units.get(x_base, '')
         y_unit = self.column_units.get(y_base, '') if agg_func != 'count' and y_base else ''
 
-        # Etykiety
+        # Etykiety osi
         x_label = self.column_labels.get(x_col, self.column_labels.get(x_base, x_col))
         y_label = self.column_labels.get(y_col, self.column_labels.get(y_base, y_col)) if y_col else ''
 
@@ -613,13 +609,14 @@ class MainWindow(QWidget):
         return {
             'x_label': f'{x_label} ({x_unit})' if x_unit else x_label,
             'y_label': f'{y_label} ({y_unit})' if y_unit else y_label,
-            'title': title.capitalize()
+            'title': title
         }
 
     def handle_other_charts(self, raw_mode=False):
         """
         Generuje wykresy wymagające agregowanych danych lub surowych danych w zależności od trybu.
         """
+        # Tryb surowych danych (bez agregacji)
         if raw_mode:
             df = self.get_filtered_data()
             if df is None or df.empty:
@@ -636,7 +633,7 @@ class MainWindow(QWidget):
             agg_func = None
             hue_col = None
 
-            params = self.prepare_plot_params(x_col, y_col, agg_func, is_raw_mode=True)
+            params = self.prepare_plot_params(x_col, y_col, is_raw_mode=True)
 
             self.generate_chart(
                 data=df,
@@ -649,45 +646,46 @@ class MainWindow(QWidget):
                 agg_func=agg_func,
                 raw_mode=True
             )
+            return
 
-        else:
-            grouped = self.prepare_aggregated_data()
-            if grouped is None or grouped.empty:
-                self.log_area.append('No data to display.')
-                return
+        # Tryb danych agregowanych
+        grouped = self.prepare_aggregated_data()
+        if grouped is None or grouped.empty:
+            self.log_area.append('No data to display.')
+            return
 
-            group_col = self.group_column_combo.currentData()
-            agg_func = self.get_selected_agg_func()
-            if not agg_func:
-                self.log_area.append('No aggregation function selected.')
-                return
+        group_col = self.group_column_combo.currentData()
+        agg_func = self.get_selected_agg_func()
+        if not agg_func:
+            self.log_area.append('No aggregation function selected.')
+            return
 
-            x_col = f'{group_col} in ranges' if self.bin_checkbox.isChecked() else group_col
-            y_col = grouped.columns[-1]
+        x_col = f'{group_col} in ranges' if self.bin_checkbox.isChecked() else group_col
+        y_col = grouped.columns[-1]
 
-            params = self.prepare_plot_params(x_col, y_col, agg_func, is_raw_mode=False)
+        params = self.prepare_plot_params(x_col, y_col, agg_func, is_raw_mode=False)
 
-            hue_col = 'Gender' if self.gender_checkbox.isChecked() else None
+        hue_col = 'Gender' if self.gender_checkbox.isChecked() else None
 
-            self.generate_chart(
-                data=grouped,
-                x_col=x_col,
-                y_col=y_col,
-                x_label=params['x_label'],
-                y_label=params['y_label'],
-                title=params['title'],
-                hue_col=hue_col,
-                agg_func=agg_func,
-                raw_mode=False
-            )
+        self.generate_chart(
+            data=grouped,
+            x_col=x_col,
+            y_col=y_col,
+            x_label=params['x_label'],
+            y_label=params['y_label'],
+            title=params['title'],
+            hue_col=hue_col,
+            agg_func=agg_func,
+            raw_mode=False
+        )
 
     def generate_hist(self, data, column):
         """
         Generuje histogram dla wybranej kolumny numerycznej z oznaczeniem średniej i mediany.
         """
-
+        # Sprawdzenie kolumny
         if not column or column not in data.columns:
-            self.log_area.append('Invalid column selected for histogram.')
+            self.log_area.append('Invalid column for histogram.')
             return
 
         if not pd.api.types.is_numeric_dtype(data[column]):
@@ -716,15 +714,14 @@ class MainWindow(QWidget):
             )
 
             # Dodaj linie pionowe dla średniej i mediany
-
             ax.axvline(self.stats['mean'], color='red', linestyle='--', linewidth=2,
                        label=f"Mean: {self.stats['mean']:.2f}")
             ax.axvline(self.stats['median'], color='green', linestyle=':', linewidth=2,
                        label=f"Median: {self.stats['median']:.2f}")
 
             # Dodaj tytuł, etykiety i legendę
-            ax.set_title(f'Histogram of {col_name.lower()}')
-            ax.set_xlabel(f'{col_name.capitalize()} ({col_unit})' if col_unit else f'{col_name.capitalize()}')
+            ax.set_title(f'Histogram of {col_name}')
+            ax.set_xlabel(f'{col_name} ({col_unit})' if col_unit else f'{col_name}')
             ax.set_ylabel('Frequency')
             ax.legend()
             ax.grid(True)
@@ -741,6 +738,7 @@ class MainWindow(QWidget):
         fig = Figure(figsize=(10, 6))
         ax = fig.add_subplot(111)
         try:
+            # Kolumny numeryczne
             numeric_data = data.select_dtypes(include='number')
             if numeric_data.shape[1] < 2:
                 self.log_area.append('Not enough numeric columns for heatmap.')
@@ -760,7 +758,7 @@ class MainWindow(QWidget):
         Generowanie pozostałych wykresów na podstawie wybranego typu.
         """
         selected_chart = self.chart_type_combo.currentText()
-
+        # Sprawdzenie typu wykresu
         if selected_chart == 'Select chart type':
             self.log_area.append('Please select a chart type before generating.')
             return
@@ -855,6 +853,8 @@ class MainWindow(QWidget):
         hue_col = self.gender_checkbox.isChecked()
         is_numeric_col = pd.api.types.is_numeric_dtype(data[x_col])
         agg_is_count = (agg_func == 'count')
+
+        # Sprawdzanie ograniczeń
         if hue_col:
             self.log_area.append('Pie Chart does not support grouping by gender')
             return False
@@ -911,17 +911,18 @@ class MainWindow(QWidget):
         """
         Wyświetla wykres na panelu po prawej stronie.
         """
-        self.clear_right_panel()  # usuwa wszystkie poprzednie widgety z layoutu
+        # Usuwanie wszystkie poprzednie widgety z layoutu
+        self.clear_right_panel()
 
         self.canvas = FigureCanvas(fig)
         self.right_layout.addWidget(self.canvas)
 
-        self.current_figure = fig  # aktualny wykres
+        # Aktualny wykres
+        self.current_figure = fig
 
     def statistics(self, data, column):
         """
-        Oblicza i loguje statystyki dla wybranej kolumny numerycznej,
-        w tym mean, median, std, min, max, count oraz percentyle
+        Oblicza statystyki dla wybranej kolumny numerycznej
         """
         values = data[column].dropna()
         if values.empty:
@@ -943,7 +944,7 @@ class MainWindow(QWidget):
         self.log_area.append(f'--- Statistics for {col_label} ---')
         self.log_area.append(
             '\n'.join([
-                f"Count: {stats['count']}",
+                f"Number of rows: {stats['number of rows']}",
                 f"Mean: {stats['mean']:.2f}",
                 f"Median: {stats['median']:.2f}",
                 f"Std: {stats['std']:.2f}",
@@ -995,6 +996,7 @@ class MainWindow(QWidget):
         self.filter_column_combo.clear()
         self.filter_column_combo.addItem('Not selected', userData=None)
 
+        # Wybór kolumn w zależności od typu wykresu
         if selected_chart == 'Histogram':
             # Dodaj tylko kolumny numeryczne
             columns_to_show = [
@@ -1027,7 +1029,7 @@ class MainWindow(QWidget):
         """
         if self.data is None:
             return
-
+        # Reset comboboxów
         self.group_column_combo.clear()
         self.group_column_combo.addItem('Not selected', userData=None)
         self.group_column_combo.setCurrentIndex(0)
@@ -1131,8 +1133,9 @@ class MainWindow(QWidget):
             return
 
         labeled_cols = [col for col in self.data.columns if col in self.column_labels]
-        numeric_cols = self.data.select_dtypes(include='number').columns
 
+        # tylko numeryczne kolumny do agregacji
+        numeric_cols = self.data.select_dtypes(include='number').columns
         numeric_labeled_cols = [
             col for col in numeric_cols if col in labeled_cols and col != selected_group_col
         ]
@@ -1144,10 +1147,12 @@ class MainWindow(QWidget):
             self.agg_column_combo.addItem(label, userData=col)
         self.agg_column_combo.setCurrentIndex(0)
 
+        # Typy wykresów zależne od kolumny grupowania
         if not pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
-            allowed = ["Select chart type", "Pie Chart", "Bar Chart"]
+            allowed = ['Select chart type', 'Bar Chart', 'Pie Chart']
         else:
-            allowed = ["Select chart type", "Histogram", "Scatter Plot", "Line Chart", "Pie Chart", "Bar Chart"]
+            allowed = ['Select chart type', 'Bar Chart', 'Scatter Plot', 'Line Chart', 'Pie Chart', 'Histogram',
+                       'Heatmap']
 
         current_chart = self.chart_type_combo.currentText()
         self.chart_type_combo.blockSignals(True)
@@ -1169,23 +1174,32 @@ class MainWindow(QWidget):
     def update_checkboxes_visibility(self):
         """
         Aktualizuje widoczność, dostępność i tooltipy checkboxów
-        na podstawie aktualnego stanu danych, wybranego wykresu,
-        kolumn oraz zaznaczonych opcji.
+        na podstawie stanu danych, wybranego wykresu i opcji.
         """
         is_raw = self.raw_data_checkbox.isChecked()
         selected_chart = self.chart_type_combo.currentText()
         selected_group_col = self.group_column_combo.currentData()
         trendline_checked = self.trendline_checkbox.isChecked()
 
+        # blokada raw data dla kolumn nienumerycznych
+        if selected_group_col and not pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
+            self.raw_data_checkbox.setChecked(False)
+            self.raw_data_checkbox.setEnabled(False)
+            self.raw_data_checkbox.setToolTip(
+                'Raw data mode requires a numeric group column.'
+            )
+        else:
+            self.raw_data_checkbox.setEnabled(True)
+            self.raw_data_checkbox.setToolTip('Enable raw data mode.')
         # W trybie raw - gender i bin są zawsze wyłączone i odznaczone
         if is_raw:
             self.gender_checkbox.setChecked(False)
             self.gender_checkbox.setEnabled(False)
-            self.gender_checkbox.setToolTip("Not available in raw data mode.")
+            self.gender_checkbox.setToolTip('Not available in raw data mode.')
 
             self.bin_checkbox.setChecked(False)
             self.bin_checkbox.setEnabled(False)
-            self.bin_checkbox.setToolTip("Not available in raw data mode.")
+            self.bin_checkbox.setToolTip('Not available in raw data mode.')
             return
 
         # Gender checkbox
@@ -1194,25 +1208,25 @@ class MainWindow(QWidget):
         if not gender_available:
             self.gender_checkbox.setChecked(False)
             self.gender_checkbox.setToolTip(
-                "Not available for the selected chart or when 'Gender' is already used or in raw mode."
+                'Not available for the selected chart or when "Gender" is already used or in raw mode.'
             )
         else:
-            self.gender_checkbox.setToolTip("Include gender-based comparison in the chart.")
+            self.gender_checkbox.setToolTip('Include gender-based comparison in the chart.')
 
         # Specjalne ustawienia dla Pie Chart
         if selected_chart == 'Pie Chart':
             if selected_group_col and pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
                 self.bin_checkbox.setEnabled(True)
                 self.bin_checkbox.setChecked(True)
-                self.bin_checkbox.setToolTip("Binning enabled for numeric group column in Pie Chart.")
+                self.bin_checkbox.setToolTip('Binning enabled for numeric group column in Pie Chart.')
             else:
                 self.bin_checkbox.setChecked(False)
                 self.bin_checkbox.setEnabled(False)
-                self.bin_checkbox.setToolTip("Binning disabled for non-numeric group column in Pie Chart.")
+                self.bin_checkbox.setToolTip('Binning disabled for non-numeric group column in Pie Chart.')
 
             self.trendline_checkbox.setChecked(False)
             self.trendline_checkbox.setEnabled(False)
-            self.trendline_checkbox.setToolTip("Trendline not available for Pie Chart.")
+            self.trendline_checkbox.setToolTip('Trendline not available for Pie Chart.')
 
         else:
             # Standardowa logika binowania i trendline
@@ -1229,16 +1243,16 @@ class MainWindow(QWidget):
             self.trendline_checkbox.setEnabled(trendline_available)
 
             self.bin_checkbox.setToolTip(
-                "Enable binning for numeric data."
+                'Enable binning for numeric data.'
                 if bin_available
-                else "Binning is only available for numeric group columns, "
-                     "compatible charts, not in raw mode, and not when trendline is active."
+                else 'Binning is only available for numeric group columns, '
+                     'compatible charts, not in raw mode, and not when trendline is active.'
             )
 
             self.trendline_checkbox.setToolTip(
-                "Show regression trend line on scatter plot."
+                'Show regression trend line on scatter plot.'
                 if trendline_available
-                else "Trendline is only available for Scatter Plot and when binning is not selected."
+                else 'Trendline is only available for Scatter Plot and when binning is not selected.'
             )
 
     def gender_checkbox_available(self, selected_chart, selected_group_col, is_raw):
@@ -1276,48 +1290,60 @@ class MainWindow(QWidget):
             return False
         return True
 
+
+    def initialize_ui_state(self, enabled=False):
+        """
+        Ustawia stan elementów UI
+        """
+        # Checkboxy
+        self.gender_checkbox.setChecked(False)
+        self.gender_checkbox.setEnabled(enabled)
+
+        self.bin_checkbox.setChecked(False)
+        self.bin_checkbox.setEnabled(enabled)
+
+        self.trendline_checkbox.setChecked(False)
+        self.trendline_checkbox.setEnabled(enabled)
+        self.trendline_checkbox.setToolTip('')
+
+        # Filtr
+        self.filter_column_combo.setVisible(True)
+        self.filter_column_combo.setEnabled(enabled)
+
+        # Grupowanie
+        self.grouping_group_box.setVisible(True)
+        self.group_column_combo.setVisible(True)
+        self.group_column_combo.setEnabled(enabled)
+
+        # Kolumna agregacji
+        self.agg_column_combo.setVisible(True)
+        self.agg_column_combo.setEnabled(enabled)
+
+        # Przyciski funkcji agregujących
+        for btn in self.agg_func_buttons.values():
+            btn.setEnabled(enabled)
+            btn.setChecked(False)
+
+        # Combo wyboru typu wykresu
+        self.chart_type_combo.setEnabled(enabled)
+        self.chart_type_combo.setToolTip('Select chart type.' if enabled else '')
+
+        # Przyciski wczytywania danych zawsze aktywne
+        self.csv_button.setEnabled(True)
+        self.db_button.setEnabled(True)
+
     def update_ui(self):
         """
         Aktualizuje stan i widoczność elementów interfejsu użytkownika
-        (comboboxy, checkboxy, radiobuttony) w zależności od trybu pracy (raw/aggregated),
-        wybranego typu wykresu oraz funkcji agregującej.
+        w zależności od trybu pracy, wybranego typu wykresu oraz funkcji agregującej.
         """
+
         is_raw = self.raw_data_checkbox.isChecked()
         selected_chart = self.chart_type_combo.currentText()
         agg_func = self.get_selected_agg_func()
 
-        # Domyślne ustawienia checkboxów - wyłączone i odznaczone
-        self.gender_checkbox.setChecked(False)
-        self.gender_checkbox.setEnabled(False)
-        self.bin_checkbox.setChecked(False)
-        self.bin_checkbox.setEnabled(False)
-        self.trendline_checkbox.setChecked(False)
-        self.trendline_checkbox.setEnabled(False)
-        self.trendline_checkbox.setToolTip("")
-
-        # Filtr zawsze widoczny i aktywny
-        self.filter_column_combo.setVisible(True)
-        self.filter_column_combo.setEnabled(True)
-
-        # Grupowanie domyślnie widoczne i aktywne
-        self.grouping_group_box.setVisible(True)
-        self.group_column_combo.setVisible(True)
-        self.group_column_combo.setEnabled(True)
-
-        # Kolumna agregacji domyślnie widoczna i aktywna
-        self.agg_column_combo.setVisible(True)
-        self.agg_column_combo.setEnabled(True)
-
-        # Domyślne ustawienia przycisków agregacji - włączone i odznaczone
-        for btn in self.agg_func_buttons.values():
-            btn.setEnabled(True)
-            btn.setChecked(False)
-
-        self.chart_type_combo.setEnabled(True)
-        self.chart_type_combo.setToolTip('Select chart type.')
-
         if selected_chart == 'Pie Chart':
-            # Dla Pie Chart tylko 'count' jest aktywne i zaznaczone
+            # Dla Pie Chart tylko 'count' aktywne i zaznaczone
             for key, btn in self.agg_func_buttons.items():
                 if key == 'count':
                     btn.setEnabled(True)
@@ -1332,15 +1358,15 @@ class MainWindow(QWidget):
             if selected_group_col and pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
                 self.bin_checkbox.setEnabled(True)
                 self.bin_checkbox.setChecked(True)
-                self.bin_checkbox.setToolTip("Binning enabled for numeric group column in Pie Chart.")
+                self.bin_checkbox.setToolTip('Binning enabled for numeric group column in Pie Chart.')
             else:
                 self.bin_checkbox.setEnabled(False)
                 self.bin_checkbox.setChecked(False)
-                self.bin_checkbox.setToolTip("Binning disabled for non-numeric group column in Pie Chart.")
+                self.bin_checkbox.setToolTip('Binning disabled for non-numeric group column in Pie Chart.')
 
             self.trendline_checkbox.setEnabled(False)
             self.trendline_checkbox.setChecked(False)
-            self.trendline_checkbox.setToolTip("Trendline not available for Pie Chart.")
+            self.trendline_checkbox.setToolTip('Trendline not available for Pie Chart.')
 
             # Grupowanie aktywne
             self.group_column_combo.setEnabled(True)
@@ -1348,7 +1374,6 @@ class MainWindow(QWidget):
 
             self.raw_data_checkbox.setChecked(False)
             self.raw_data_checkbox.setEnabled(False)
-
             return
 
         if selected_chart in ['Histogram', 'Heatmap']:
@@ -1364,16 +1389,13 @@ class MainWindow(QWidget):
                 btn.setEnabled(False)
                 btn.setChecked(False)
 
-            # Checkboxy wyłączone i odznaczone
-
+            # Raw data wyłączone
             self.raw_data_checkbox.setChecked(False)
             self.raw_data_checkbox.setEnabled(False)
-
             return
 
-        # Jeśli tryb raw
         if is_raw:
-            # Wymuszanie Scatter Plot i zablokuj wybór wykresu
+            # Wymuszenie Scatter Plot
             if selected_chart != 'Scatter Plot':
                 self.chart_type_combo.setCurrentText('Scatter Plot')
             self.chart_type_combo.setEnabled(False)
@@ -1396,65 +1418,16 @@ class MainWindow(QWidget):
             # Trendline dostępny i aktywny
             self.trendline_checkbox.setEnabled(True)
             self.trendline_checkbox.setChecked(False)
-            self.trendline_checkbox.setToolTip("Show regression trend line on scatter plot.")
-
+            self.trendline_checkbox.setToolTip('Show regression trend line on scatter plot.')
             return
 
         # Pozostałe przypadki
-        self.chart_type_combo.setEnabled(True)
-        self.chart_type_combo.setToolTip('Select chart type.')
-
-        self.filter_column_combo.setVisible(True)
-        self.filter_column_combo.setEnabled(True)
-
-        self.grouping_group_box.setVisible(True)
-        self.group_column_combo.setVisible(True)
-        self.group_column_combo.setEnabled(True)
-
-        self.agg_column_combo.setVisible(True)
-
-        if is_raw:
-            self.agg_column_combo.setEnabled(True)
-            for btn in self.agg_func_buttons.values():
-                btn.setEnabled(False)
-                btn.setChecked(False)
+        if agg_func == 'count':
+            self.agg_column_combo.setEnabled(False)
         else:
-            for btn in self.agg_func_buttons.values():
-                btn.setEnabled(True)
-            if agg_func == 'count':
-                self.agg_column_combo.setEnabled(False)
-            else:
-                self.agg_column_combo.setEnabled(True)
+            self.agg_column_combo.setEnabled(True)
 
         self.update_checkboxes_visibility()
-
-    def set_controls_enabled(self, enabled: bool):
-        """
-        Ustawia dostępność wszystkich comboboxów, checkboxów i przycisków
-        w zależności od tego, czy dane zostały wczytane.
-        """
-        # Comboboxy
-        self.filter_column_combo.setEnabled(enabled)
-        self.category_filter_combo.setEnabled(enabled)
-        self.group_column_combo.setEnabled(enabled)
-        self.agg_column_combo.setEnabled(enabled)
-        self.chart_type_combo.setEnabled(enabled)
-
-        # Checkboxy
-        self.gender_checkbox.setEnabled(enabled)
-        self.bin_checkbox.setEnabled(enabled)
-        self.trendline_checkbox.setEnabled(enabled)
-        self.raw_data_checkbox.setEnabled(enabled)
-
-        # Funkcje agregujące
-        for btn in self.agg_func_buttons.values():
-            btn.setEnabled(enabled)
-
-        # Przyciski raportów i wykresów
-        self.group_execute_btn.setEnabled(enabled)
-        self.generate_csv_btn.setEnabled(enabled)
-        self.generate_pdf_btn.setEnabled(enabled)
-        self.clear_filters_btn.setEnabled(enabled)
 
     def category_combo_changed(self):
         """
@@ -1466,6 +1439,9 @@ class MainWindow(QWidget):
 
     # Wczytanie pliku-CSV/SQLite
     def data_load_update(self):
+        """
+        Aktualizuje UI po wczytaniu danych z pliku CSV/SQLite.
+        """
         try:
             if self.data is not None:
                 self.log_area.append('Data has been processed.')
@@ -1474,16 +1450,15 @@ class MainWindow(QWidget):
                 self.update_checkboxes_visibility()
 
                 # Odblokowanie elementów po załadowaniu danych
-                self.set_controls_enabled(True)
+                self.initialize_ui_state(enabled=True)
 
-            else:
-                self.log_area.append('An error occurred while processing data.')
         except Exception as e:
             self.log_area.append(f"Error: {e}")
+            self.initialize_ui_state(enabled=False)
 
     def select_csv_file(self):
         """
-        Otwiera okno wyboru pliku CSV, wczytuje dane i aktualizuje GUI.
+        Otwiera okno wyboru pliku i wczytuje dane z pliku CSV
         """
         path, _ = QFileDialog.getOpenFileName(self, 'Choose CSV file', '', 'CSV files (*.csv)')
         if not path:
@@ -1496,37 +1471,40 @@ class MainWindow(QWidget):
         self.data_load_update()
 
     def load_data_from_sqlite(self):
-        db_path = "database.db"  # domyślna baza w katalogu projektu
+        """
+        Wczytywanie danych z bazy SQLite
+        """
+        db_path = 'database.db'  # domyślna baza w katalogu projektu
 
         # Jeśli domyślna baza nie istnieje, użytkownik może wybrać plik
         if not os.path.exists(db_path):
-            self.log_area.append("Default database not found. Please select a database file.")
+            self.log_area.append('Default database not found. Please select a database file.')
             db_path, _ = QFileDialog.getOpenFileName(
                 self,
-                "Select SQLite database",
-                "",
-                "SQLite Database (*.db)"
+                'Select SQLite database',
+                '',
+                'SQLite Database (*.db)'
             )
             if not db_path:
-                self.log_area.append("No database selected. Operation cancelled.")
+                self.log_area.append('No database selected. Operation cancelled.')
                 return
 
         try:
             # połączenie z bazą SQLite
-            self.db_engine = create_engine(f"sqlite:///{db_path}")
+            self.db_engine = create_engine(f'sqlite:///{db_path}')
 
             # wczytanie danych z tabeli 'patients'
-            self.data = pd.read_sql_table("patients", self.db_engine)
-            # aktualizacja GUI
+            self.data = pd.read_sql_table('patients', self.db_engine)
 
-            self.log_area.append(f"Data loaded from table 'patients' in '{os.path.basename(db_path)}'.")
-            self.data_source = f"{os.path.basename(db_path)} → patients"
+            # aktualizacja GUI
+            self.log_area.append(f'Data loaded from table "patients" in "{os.path.basename(db_path)}".')
+            self.data_source = f'{os.path.basename(db_path)} → patients'
 
             # aktualizacja danych w aplikacji
             self.data_load_update()
 
         except Exception as e:
-            self.log_area.append(f"❌ Error while loading data from database: {str(e)}")
+            self.log_area.append(f'Error while loading data from database: {str(e)}')
 
     # Eksport wyników do pliku CSV.
     def generate_report(self, report_format):
@@ -1569,7 +1547,7 @@ class MainWindow(QWidget):
 
     def generate_csv_report(self, df, path):
         """
-        Eksportuje podany DataFrame do pliku CSV.
+        Eksportuje dane do pliku CSV.
         """
         try:
             df.to_csv(path, index=False)
@@ -1578,6 +1556,9 @@ class MainWindow(QWidget):
             self.log_area.append(f'Failed to save CSV report:\n{str(e)}')
 
     def generate_pdf_report(self, df, path):
+        """
+        Eksportuje dane i wykres do pliku PDF.
+        """
         try:
             if not (hasattr(self, 'current_figure') and self.current_figure):
                 self.log_area.append('No chart available to include in the report.')
@@ -1591,7 +1572,7 @@ class MainWindow(QWidget):
             c = canvas.Canvas(path, pagesize=A4)
             width, height = A4
 
-            # === Strona 1 - wykres i informacje ===
+            # Strona 1 - wykres i informacje
             c.setFont('Helvetica-Bold', 16)
             c.drawString(50, height - 50, 'Data Report')
 
@@ -1599,17 +1580,16 @@ class MainWindow(QWidget):
             info_lines = [
                 f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 f"Data source: {getattr(self, 'data_source', 'Unknown')}",
-                f"Applied filters: {getattr(self, 'applied_filters', 'None')}",
-                f"Grouping: {getattr(self, 'grouping_columns', 'None')}",
-                f"Aggregation: {getattr(self, 'aggregation_functions', 'None')}",
-                f"Data mode: {'Raw' if self.raw_data_checkbox.isChecked() else 'Aggregated'}"
+                f"Filter by: {getattr(self, 'applied_filters', 'None')}",
+                f"Group by: {getattr(self, 'grouping_columns', 'None')}",
+                f"Aggregation: {getattr(self, 'aggregation_functions', 'None')}"
             ]
             text_y = height - 80
             for line in info_lines:
                 c.drawString(50, text_y, line)
                 text_y -= 14
 
-            # === Wykres ===
+            # Wykres
             fig_width, fig_height = self.current_figure.get_size_inches()
             fig_dpi = self.current_figure.get_dpi()
             img_width_px = fig_width * fig_dpi
@@ -1623,18 +1603,20 @@ class MainWindow(QWidget):
             chart_bottom = text_y - chart_height - 10
             c.drawImage(chart_path, 50, chart_bottom, width=chart_width, height=chart_height)
 
-            # Statystyki pod wykresem
             stats = getattr(self, 'stats', None)
             if stats:
                 c.setFont('Helvetica-Bold', 12)
-                c.drawString(50, chart_bottom - 25, 'Summary statistics:')
+
+                margin = 10
+                header_y = chart_bottom - margin - 12
+                c.drawString(50, header_y, 'Summary statistics:')
 
                 c.setFont('Helvetica', 10)
-                y_stat = chart_bottom - 45
                 line_height = 14
+                y_stat = header_y - line_height
                 for key, value in stats.items():
-                    text = f"{key.capitalize():<8}: {value:.2f}" if isinstance(value,
-                                                                               (int, float)) else f"{key}: {value}"
+                    text = f"{key.capitalize():<10}: {value:.2f}" if isinstance(value,
+                                                                                (int, float)) else f"{key.capitalize()}: {value}"
                     c.drawString(70, y_stat, text)
                     y_stat -= line_height
 
@@ -1650,10 +1632,10 @@ class MainWindow(QWidget):
 
             for page in range(total_pages):
                 c.setFont('Helvetica-Bold', 16)
-                c.drawString(50, height - 50, 'Data Report (cont.)')
+                c.drawString(50, height - 50, 'Dataset Table')
 
                 c.setFont('Helvetica', 9)
-                c.drawRightString(width - 50, 30, f"Page {page + 3}")  # +3 bo str.1 = wykres, str.2 = statystyki
+                c.drawRightString(width - 50, 30, f"Page {page + 2}")
 
                 start = page * rows_per_page + 1
                 end = start + rows_per_page
