@@ -308,11 +308,11 @@ class MainWindow(QWidget):
         ])
         self.chart_type_combo.currentIndexChanged.connect(self.chart_type_changed)
 
-        self.group_execute_btn = QPushButton('Generate chart')
-        self.group_execute_btn.clicked.connect(self.update_chart)
+        self.generate_chart_btn = QPushButton('Generate chart')
+        self.generate_chart_btn.clicked.connect(self.update_chart)
 
         layout.addWidget(self.chart_type_combo)
-        layout.addWidget(self.group_execute_btn)
+        layout.addWidget(self.generate_chart_btn)
 
         self.chart_group_box.setLayout(layout)
         self.left_layout.addWidget(self.chart_group_box)
@@ -1168,7 +1168,7 @@ class MainWindow(QWidget):
             )
         self.chart_type_combo.blockSignals(False)
 
-        self.group_execute_btn.setVisible(True)
+        self.generate_chart_btn.setVisible(True)
         self.update_ui()
 
     def update_checkboxes_visibility(self):
@@ -1306,6 +1306,9 @@ class MainWindow(QWidget):
         self.trendline_checkbox.setEnabled(enabled)
         self.trendline_checkbox.setToolTip('')
 
+        self.raw_data_checkbox.setChecked(False)
+        self.raw_data_checkbox.setEnabled(enabled)
+
         # Filtr
         self.filter_column_combo.setVisible(True)
         self.filter_column_combo.setEnabled(enabled)
@@ -1324,13 +1327,19 @@ class MainWindow(QWidget):
             btn.setEnabled(enabled)
             btn.setChecked(False)
 
-        # Combo wyboru typu wykresu
+        # Combobox wyboru typu wykresu
         self.chart_type_combo.setEnabled(enabled)
         self.chart_type_combo.setToolTip('Select chart type.' if enabled else '')
 
         # Przyciski wczytywania danych zawsze aktywne
         self.csv_button.setEnabled(True)
         self.db_button.setEnabled(True)
+
+        # Pozostałe przyciski
+        self.generate_csv_btn.setEnabled(enabled)
+        self.generate_chart_btn.setEnabled(enabled)
+        self.generate_pdf_btn.setEnabled(enabled)
+        self.clear_filters_btn.setEnabled(enabled)
 
     def update_ui(self):
         """
