@@ -357,7 +357,10 @@ class MainWindow(QWidget):
         self.agg_func_group.setExclusive(True)
 
         self.chart_type_combo.setCurrentIndex(0)
+
         self.clear_right_panel()
+
+        self.raw_data_checkbox.setChecked(False)
 
         self.update_ui()
 
@@ -385,30 +388,31 @@ class MainWindow(QWidget):
             return None
 
         filter_col = self.filter_column_combo.currentData()
-        if not filter_col:
+        if filter_col is None:
+            self.applied_filters = "-"
             return self.data.copy()
 
         col_data = self.data[filter_col]
 
-        # Filtrowanie w kolumnach z wartościami numerycznymi
+        # Filtrowanie numeryczne
         if pd.api.types.is_numeric_dtype(col_data):
             min_val = self.filter_min_spinbox.value()
             max_val = self.filter_max_spinbox.value()
             filtered_df = self.data[(col_data >= min_val) & (col_data <= max_val)].copy()
             filter_description = f"{filter_col}: {min_val} - {max_val}"
-        # Filtrowanie w kolumnach z wartościami nienumerycznymi
-        elif self.category_filter_combo.isVisible():
+
+        # Filtrowanie kategoryczne (wszystkie typy nienumeryczne)
+        else:
             selected_val = self.category_filter_combo.currentData()
             if selected_val is not None:
-                filtered_df = self.data[self.data[filter_col].astype(str) == str(selected_val)].copy()
+                # Porównanie z użyciem .eq dla wydajności i bezpieczeństwa
+                filtered_df = self.data[col_data.eq(selected_val)].copy()
                 filter_description = f"{filter_col} = '{selected_val}'"
             else:
                 filtered_df = self.data.copy()
                 filter_description = f"{filter_col} - no value selected"
-        else:
-            filtered_df = self.data.copy()
-            filter_description = "-"
-        #  Zapis informacji o filtrze
+
+        # Zapisanie informacji o zastosowanym filtrze
         self.applied_filters = filter_description
         return filtered_df
 
@@ -1290,7 +1294,6 @@ class MainWindow(QWidget):
             return False
         return True
 
-
     def initialize_ui_state(self, enabled=False):
         """
         Ustawia stan elementów UI
@@ -1351,6 +1354,36 @@ class MainWindow(QWidget):
         selected_chart = self.chart_type_combo.currentText()
         agg_func = self.get_selected_agg_func()
 
+        if not is_raw:
+            self.chart_type_combo.setEnabled(True)
+            self.chart_type_combo.setToolTip('Select chart type.')
+        if is_raw:
+            # Wymuszenie Scatter Plot
+            if selected_chart != 'Scatter Plot':
+                self.chart_type_combo.setCurrentText('Scatter Plot')
+            self.chart_type_combo.setEnabled(False)
+            self.chart_type_combo.setToolTip('Only Scatter Plot is available in raw data mode.')
+
+            # Grupowanie widoczne i aktywne
+            self.grouping_group_box.setVisible(True)
+            self.group_column_combo.setVisible(True)
+            self.group_column_combo.setEnabled(True)
+
+            # Kolumna agregacji widoczna i aktywna
+            self.agg_column_combo.setVisible(True)
+            self.agg_column_combo.setEnabled(True)
+
+            # Funkcje agregujące wyłączone i odznaczone
+            for btn in self.agg_func_buttons.values():
+                btn.setEnabled(False)
+                btn.setChecked(False)
+
+            # Trendline dostępny i aktywny
+            self.trendline_checkbox.setEnabled(True)
+            self.trendline_checkbox.setChecked(False)
+            self.trendline_checkbox.setToolTip('Show regression trend line on scatter plot.')
+            return
+
         if selected_chart == 'Pie Chart':
             # Dla Pie Chart tylko 'count' aktywne i zaznaczone
             for key, btn in self.agg_func_buttons.items():
@@ -1401,33 +1434,6 @@ class MainWindow(QWidget):
             # Raw data wyłączone
             self.raw_data_checkbox.setChecked(False)
             self.raw_data_checkbox.setEnabled(False)
-            return
-
-        if is_raw:
-            # Wymuszenie Scatter Plot
-            if selected_chart != 'Scatter Plot':
-                self.chart_type_combo.setCurrentText('Scatter Plot')
-            self.chart_type_combo.setEnabled(False)
-            self.chart_type_combo.setToolTip('Only Scatter Plot is available in raw data mode.')
-
-            # Grupowanie widoczne i aktywne
-            self.grouping_group_box.setVisible(True)
-            self.group_column_combo.setVisible(True)
-            self.group_column_combo.setEnabled(True)
-
-            # Kolumna agregacji widoczna i aktywna
-            self.agg_column_combo.setVisible(True)
-            self.agg_column_combo.setEnabled(True)
-
-            # Funkcje agregujące wyłączone i odznaczone
-            for btn in self.agg_func_buttons.values():
-                btn.setEnabled(False)
-                btn.setChecked(False)
-
-            # Trendline dostępny i aktywny
-            self.trendline_checkbox.setEnabled(True)
-            self.trendline_checkbox.setChecked(False)
-            self.trendline_checkbox.setToolTip('Show regression trend line on scatter plot.')
             return
 
         # Pozostałe przypadki
@@ -1625,7 +1631,8 @@ class MainWindow(QWidget):
                 y_stat = header_y - line_height
                 for key, value in stats.items():
                     text = f"{key.capitalize():<10}: {value:.2f}" if isinstance(value,
-                                                                                (int, float)) else f"{key.capitalize()}: {value}"
+                                                                                (int,
+                                                                                 float)) else f"{key.capitalize()}: {value}"
                     c.drawString(70, y_stat, text)
                     y_stat -= line_height
 
