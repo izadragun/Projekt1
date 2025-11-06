@@ -339,7 +339,7 @@ class MainWindow(QWidget):
         """
         Resetuje wszystkie filtry, grupowanie i typ wykresu oraz przywraca początkowy stan UI.
         """
-        # Reset dynamicznych wartości filtrów i grupowania
+        # Reset widoczności i wartości filtrów
         self.filter_column_combo.setCurrentIndex(0)
         self.filter_min_spinbox.setValue(self.filter_min_spinbox.minimum())
         self.filter_max_spinbox.setValue(self.filter_max_spinbox.maximum())
@@ -348,20 +348,21 @@ class MainWindow(QWidget):
         self.category_filter_combo.setCurrentIndex(0)
         self.category_filter_combo.hide()
         self.category_combo_label.hide()
+
+        # Reset grupowania i agregacji
         self.group_column_combo.setCurrentIndex(0)
         self.agg_column_combo.setCurrentIndex(0)
 
+        # Reset funkcji agregujących
         self.agg_func_group.setExclusive(False)
         for btn in self.agg_func_buttons.values():
             btn.setChecked(False)
         self.agg_func_group.setExclusive(True)
 
         self.chart_type_combo.setCurrentIndex(0)
-
         self.clear_right_panel()
 
-        self.raw_data_checkbox.setChecked(False)
-
+        self.initialize_ui_state(enabled=True)
         self.update_ui()
 
         self.log_area.append('Filters and grouping have been reset.')
@@ -560,6 +561,8 @@ class MainWindow(QWidget):
         # Czyszczenie poprzednich wykresów
         self.clear_right_panel()
         selected_chart = self.chart_type_combo.currentText()
+        # Reset statystyk przy każdym nowym wykresie
+        self.stats = None
 
         # Histogram i heatmapa
         if selected_chart in ['Histogram', 'Heatmap']:
@@ -574,6 +577,7 @@ class MainWindow(QWidget):
                 if not filter_col:
                     self.log_area.append('No filter column selected for histogram.')
                     return
+                self.stats = self.statistics(df, filter_col)
                 self.generate_hist(df, column=filter_col)
             else:
                 self.generate_heatmap(df)
@@ -602,7 +606,7 @@ class MainWindow(QWidget):
 
         # Tytuł wykresu
         if is_raw_mode:
-            title = f'{y_label} by {x_label} (raw data)'
+            title = f'{y_label} by {x_label}'
         elif agg_func == 'count':
             title = f'{self.agg_func_buttons[agg_func].text()} by {x_label}'
         elif agg_func:
@@ -1185,17 +1189,18 @@ class MainWindow(QWidget):
         selected_group_col = self.group_column_combo.currentData()
         trendline_checked = self.trendline_checkbox.isChecked()
 
-        # blokada raw data dla kolumn nienumerycznych
-        if selected_group_col and not pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
+        # Raw data checkbox
+        raw_available = self.raw_data_checkbox_available(selected_chart, selected_group_col)
+        self.raw_data_checkbox.setEnabled(raw_available)
+        if not raw_available:
             self.raw_data_checkbox.setChecked(False)
-            self.raw_data_checkbox.setEnabled(False)
             self.raw_data_checkbox.setToolTip(
-                'Raw data mode requires a numeric group column.'
+                'Raw data mode is not available for this chart type or non-numeric data.'
             )
         else:
-            self.raw_data_checkbox.setEnabled(True)
             self.raw_data_checkbox.setToolTip('Enable raw data mode.')
-        # W trybie raw - gender i bin są zawsze wyłączone i odznaczone
+
+        # W trybie raw - checkboxy gender i bin są zawsze wyłączone i odznaczone
         if is_raw:
             self.gender_checkbox.setChecked(False)
             self.gender_checkbox.setEnabled(False)
@@ -1217,7 +1222,7 @@ class MainWindow(QWidget):
         else:
             self.gender_checkbox.setToolTip('Include gender-based comparison in the chart.')
 
-        # Specjalne ustawienia dla Pie Chart
+        # Ustawienia dla Pie Chart
         if selected_chart == 'Pie Chart':
             if selected_group_col and pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
                 self.bin_checkbox.setEnabled(True)
@@ -1258,6 +1263,21 @@ class MainWindow(QWidget):
                 if trendline_available
                 else 'Trendline is only available for Scatter Plot and when binning is not selected.'
             )
+
+    def raw_data_checkbox_available(self, selected_chart, selected_group_col):
+        """
+        Określa, czy tryb raw data może być dostępny dla danego wykresu.
+        """
+        # niedostępny dla typów, które nie obsługują surowych danych
+        if selected_chart in ['Pie Chart', 'Histogram', 'Heatmap']:
+            return False
+        # brak danych lub brak kolumny grupowania
+        if self.data is None or selected_group_col is None:
+            return False
+        # tylko dla danych numerycznych
+        if not pd.api.types.is_numeric_dtype(self.data[selected_group_col]):
+            return False
+        return True
 
     def gender_checkbox_available(self, selected_chart, selected_group_col, is_raw):
         """
@@ -1349,14 +1369,16 @@ class MainWindow(QWidget):
         Aktualizuje stan i widoczność elementów interfejsu użytkownika
         w zależności od trybu pracy, wybranego typu wykresu oraz funkcji agregującej.
         """
-
         is_raw = self.raw_data_checkbox.isChecked()
         selected_chart = self.chart_type_combo.currentText()
         agg_func = self.get_selected_agg_func()
 
-        if not is_raw:
-            self.chart_type_combo.setEnabled(True)
-            self.chart_type_combo.setToolTip('Select chart type.')
+        # Funkcje agregujące zawsze najpierw wyłączone i odznaczone
+        for btn in self.agg_func_buttons.values():
+            btn.setEnabled(True)
+            btn.setChecked(False)
+
+        # Tryb raw data
         if is_raw:
             # Wymuszenie Scatter Plot
             if selected_chart != 'Scatter Plot':
@@ -1378,21 +1400,24 @@ class MainWindow(QWidget):
                 btn.setEnabled(False)
                 btn.setChecked(False)
 
-            # Trendline dostępny i aktywny
+            # Trendline dostępny
             self.trendline_checkbox.setEnabled(True)
             self.trendline_checkbox.setChecked(False)
             self.trendline_checkbox.setToolTip('Show regression trend line on scatter plot.')
+
+            # Aktualizacja innych checkboxów
+            self.update_checkboxes_visibility()
             return
 
+        # Przywrócenie normalnego stanu combobox wykresów
+        self.chart_type_combo.setEnabled(True)
+        self.chart_type_combo.setToolTip('Select chart type.')
+
+        # Pie Chart
         if selected_chart == 'Pie Chart':
-            # Dla Pie Chart tylko 'count' aktywne i zaznaczone
             for key, btn in self.agg_func_buttons.items():
-                if key == 'count':
-                    btn.setEnabled(True)
-                    btn.setChecked(True)
-                else:
-                    btn.setEnabled(False)
-                    btn.setChecked(False)
+                btn.setEnabled(key == 'count')
+                btn.setChecked(key == 'count')
 
             self.agg_column_combo.setEnabled(False)
 
@@ -1410,7 +1435,6 @@ class MainWindow(QWidget):
             self.trendline_checkbox.setChecked(False)
             self.trendline_checkbox.setToolTip('Trendline not available for Pie Chart.')
 
-            # Grupowanie aktywne
             self.group_column_combo.setEnabled(True)
             self.grouping_group_box.setVisible(True)
 
@@ -1418,25 +1442,24 @@ class MainWindow(QWidget):
             self.raw_data_checkbox.setEnabled(False)
             return
 
+        # Histogram i Heatmap
         if selected_chart in ['Histogram', 'Heatmap']:
-            # Filtr aktywny
             self.filter_column_combo.setEnabled(True)
-
-            # Kolumna grupowania i agregacji nieaktywna
             self.group_column_combo.setEnabled(False)
             self.agg_column_combo.setEnabled(False)
-
-            # Przyciski wyłączone i odznaczone
             for btn in self.agg_func_buttons.values():
                 btn.setEnabled(False)
                 btn.setChecked(False)
 
-            # Raw data wyłączone
             self.raw_data_checkbox.setChecked(False)
             self.raw_data_checkbox.setEnabled(False)
+            self.update_checkboxes_visibility()
             return
 
         # Pozostałe przypadki
+        self.group_column_combo.setEnabled(True)
+        self.grouping_group_box.setVisible(True)
+
         if agg_func == 'count':
             self.agg_column_combo.setEnabled(False)
         else:
